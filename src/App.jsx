@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
-import { VRButton } from 'three/examples/jsm/webxr/VRButton.js'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
 
@@ -26,8 +25,8 @@ function App() {
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
 
-    // 🔥 QUAN TRỌNG NHẤT
-    document.body.appendChild(VRButton.createButton(renderer))
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -52,6 +51,9 @@ function App() {
     const loader = new GLTFLoader()
     const clock = new THREE.Clock()
 
+    // =========================
+    // MODEL (GIỮ NGUYÊN)
+    // =========================
     function loadModel(path) {
       loader.load(path, (gltf) => {
         if (currentModel) scene.remove(currentModel)
@@ -66,7 +68,8 @@ function App() {
 
         model.position.set(-center.x, -box.min.y, -center.z)
 
-        const scale = 2 / size.y
+        const targetHeight = 2
+        const scale = targetHeight / size.y
         model.scale.setScalar(scale)
 
         camera.position.set(0, 1.5, 4)
@@ -80,6 +83,9 @@ function App() {
       })
     }
 
+    // =========================
+    // ENV (ZOOM x20)
+    // =========================
     let envZoom = 20
 
     function loadEnvironment(path) {
@@ -107,7 +113,7 @@ function App() {
     }
 
     // =========================
-    // CONTROLLER (FULL INPUT)
+    // CONTROLLER
     // =========================
     const controller = renderer.xr.getController(0)
     scene.add(controller)
@@ -136,6 +142,8 @@ function App() {
       }
     }
 
+    controller.addEventListener('selectstart', teleport)
+
     function handleVR(delta) {
       const session = renderer.xr.getSession()
       if (!session) return
@@ -145,7 +153,7 @@ function App() {
       session.inputSources.forEach((source) => {
         if (!source.gamepad) return
 
-        const axes = source.gamepad.axes
+        const axes = source.gamepad.axes || [0, 0]
 
         const forward = -axes[1]
         const right = axes[0]
@@ -163,8 +171,33 @@ function App() {
       })
     }
 
-    controller.addEventListener('selectstart', teleport)
+    // =========================
+    // XR START (QUAN TRỌNG NHẤT)
+    // =========================
+    window.enterVR = async () => {
+      try {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: [
+            'local-floor',
+            'bounded-floor',
+            'hand-tracking',
+            'layers'
+          ]
+        })
 
+        renderer.xr.setSession(session)
+
+        console.log('XR STARTED', session)
+        console.log('inputSources', session.inputSources)
+
+      } catch (e) {
+        console.error('XR ERROR', e)
+      }
+    }
+
+    // =========================
+    // LOOP
+    // =========================
     renderer.setAnimationLoop(() => {
       const delta = clock.getDelta()
       if (mixer) mixer.update(delta)
@@ -177,6 +210,9 @@ function App() {
       renderer.render(scene, camera)
     })
 
+    // =========================
+    // DEFAULT
+    // =========================
     loadModel('/models/avatar.glb')
     loadEnvironment('/env/room1.glb')
 
@@ -256,6 +292,12 @@ function App() {
             window.updateEnvScale(v)
           }}
         />
+
+        <hr />
+
+        <button className="vr-btn" onClick={() => window.enterVR()}>
+          Enter VR
+        </button>
       </div>
     </div>
   )
