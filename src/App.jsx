@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
+import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
 
 function App() {
@@ -66,7 +67,8 @@ function App() {
 
         model.position.set(-center.x, -box.min.y, -center.z)
 
-        const scale = 2 / size.y
+        const targetHeight = 2
+        const scale = targetHeight / size.y
         model.scale.setScalar(scale)
 
         camera.position.set(0, 1.5, 4)
@@ -111,10 +113,22 @@ function App() {
     }
 
     // =========================
-    // 🔥 XR CONTROLLER + MOVEMENT
+    // 🔥 CONTROLLER (FIX PICO)
     // =========================
-    const controller = renderer.xr.getController(0)
-    scene.add(controller)
+    const controller1 = renderer.xr.getController(0)
+    const controller2 = renderer.xr.getController(1)
+    scene.add(controller1)
+    scene.add(controller2)
+
+    const controllerModelFactory = new XRControllerModelFactory()
+
+    const grip1 = renderer.xr.getControllerGrip(0)
+    grip1.add(controllerModelFactory.createControllerModel(grip1))
+    scene.add(grip1)
+
+    const grip2 = renderer.xr.getControllerGrip(1)
+    grip2.add(controllerModelFactory.createControllerModel(grip2))
+    scene.add(grip2)
 
     const raycaster = new THREE.Raycaster()
     const tempMatrix = new THREE.Matrix4()
@@ -133,62 +147,54 @@ function App() {
       const hit = raycaster.intersectObject(environment, true)[0]
 
       if (hit) {
-        const xrCam = renderer.xr.getCamera()
-        xrCam.position.set(hit.point.x, hit.point.y + 1.6, hit.point.z)
+        const cam = renderer.xr.getCamera()
+        cam.position.set(hit.point.x, hit.point.y + 1.6, hit.point.z)
       }
     }
 
-    controller.addEventListener('select', () => {
-      if (renderer.xr.isPresenting) teleport(controller)
+    controller1.addEventListener('selectstart', () => {
+      teleport(controller1)
     })
 
-    function handleVRMovement(delta) {
+    function handleVR(delta) {
       const session = renderer.xr.getSession()
       if (!session) return
 
-      const xrCam = renderer.xr.getCamera()
+      const cam = renderer.xr.getCamera()
 
       session.inputSources.forEach((source) => {
         if (!source.gamepad) return
 
         const axes = source.gamepad.axes
 
-        // 🔥 FIX PICO AXES
         move.forward = -axes[1] || 0
         move.right = axes[0] || 0
       })
 
       const dir = new THREE.Vector3()
-      xrCam.getWorldDirection(dir)
+      cam.getWorldDirection(dir)
       dir.y = 0
       dir.normalize()
 
       const right = new THREE.Vector3()
       right.crossVectors(dir, new THREE.Vector3(0, 1, 0))
 
-      xrCam.position.addScaledVector(dir, move.forward * speed * delta)
-      xrCam.position.addScaledVector(right, move.right * speed * delta)
+      cam.position.addScaledVector(dir, move.forward * speed * delta)
+      cam.position.addScaledVector(right, move.right * speed * delta)
     }
 
     // =========================
-    // 🔥 XR START (FIX CHUẨN PICO)
+    // XR START
     // =========================
     window.enterVR = async () => {
-      if (!navigator.xr) {
-        alert('XR not supported')
-        return
-      }
-
       try {
         const session = await navigator.xr.requestSession('immersive-vr', {
-          optionalFeatures: ['local-floor', 'bounded-floor']
+          optionalFeatures: ['local-floor']
         })
 
         renderer.xr.setSession(session)
-
-        console.log('✅ VR STARTED')
       } catch (e) {
-        console.error('❌ VR FAIL', e)
+        console.error(e)
       }
     }
 
@@ -200,7 +206,7 @@ function App() {
       if (mixer) mixer.update(delta)
 
       if (renderer.xr.isPresenting) {
-        handleVRMovement(delta)
+        handleVR(delta)
       }
 
       controls.update()
@@ -219,12 +225,8 @@ function App() {
     }
 
     window.loadEnv = (path) => loadEnvironment(path)
-
     window.updateEnvScale = (v) => updateEnvScale(v)
 
-    // =========================
-    // RESIZE
-    // =========================
     function resize() {
       const width = container.clientWidth
       const height = container.clientHeight
@@ -244,13 +246,10 @@ function App() {
         <div ref={mountRef} className="canvas"></div>
       </div>
 
-      <div className="sidebar">
+      <div className="sidebar" style={{ overflowY: 'auto', maxHeight: '100vh' }}>
         <h3>Models:</h3>
 
-        <button
-          className={active === 'default' ? 'active' : ''}
-          onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}
-        >
+        <button className={active === 'default' ? 'active' : ''} onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}>
           Mặc định
         </button>
 
@@ -274,13 +273,8 @@ function App() {
 
         <h3>Background</h3>
 
-        <button onClick={() => window.loadEnv('/env/room1.glb')}>
-          Room 1
-        </button>
-
-        <button onClick={() => window.loadEnv('/env/room2.glb')}>
-          Room 2
-        </button>
+        <button onClick={() => window.loadEnv('/env/room1.glb')}>Room 1</button>
+        <button onClick={() => window.loadEnv('/env/room2.glb')}>Room 2</button>
 
         <hr />
 
