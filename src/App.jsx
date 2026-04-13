@@ -19,6 +19,7 @@ function App() {
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.xr.enabled = true
+    renderer.xr.setReferenceSpaceType('local-floor')
 
     const container = mountRef.current
     container.innerHTML = ''
@@ -67,8 +68,7 @@ function App() {
 
         model.position.set(-center.x, -box.min.y, -center.z)
 
-        const targetHeight = 2
-        const scale = targetHeight / size.y
+        const scale = 2 / size.y
         model.scale.setScalar(scale)
 
         camera.position.set(0, 1.5, 4)
@@ -99,8 +99,7 @@ function App() {
 
         environment.position.set(-center.x, -box.min.y, -center.z)
 
-        const targetSize = 2 * envZoom
-        const scale = targetSize / Math.max(size.x, size.z)
+        const scale = (2 * envZoom) / Math.max(size.x, size.z)
         environment.scale.setScalar(scale)
 
         scene.add(environment)
@@ -113,7 +112,7 @@ function App() {
     }
 
     // =========================
-    // CONTROLLER (PICO SAFE)
+    // CONTROLLER (HIỂN THỊ)
     // =========================
     const controller = renderer.xr.getController(0)
     scene.add(controller)
@@ -123,38 +122,14 @@ function App() {
     grip.add(factory.createControllerModel(grip))
     scene.add(grip)
 
-    const raycaster = new THREE.Raycaster()
-    const tempMatrix = new THREE.Matrix4()
+    // =========================
+    // MOVEMENT
+    // =========================
+    let moving = false
+    let fallbackAutoMove = true // 🔥 fallback nếu Pico không có input
 
-    let movingForward = false
-
-    function teleport(ctrl) {
-      if (!environment) return
-
-      tempMatrix.identity().extractRotation(ctrl.matrixWorld)
-
-      raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld)
-      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix)
-
-      const hit = raycaster.intersectObject(environment, true)[0]
-
-      if (hit) {
-        const cam = renderer.xr.getCamera()
-        cam.position.set(hit.point.x, hit.point.y + 1.6, hit.point.z)
-      }
-    }
-
-    controller.addEventListener('selectstart', () => {
-      movingForward = true
-      teleport(controller) // bắn tia luôn
-    })
-
-    controller.addEventListener('selectend', () => {
-      movingForward = false
-    })
-
-    function handleMove(delta) {
-      if (!movingForward) return
+    function moveForward(delta) {
+      if (!moving && !fallbackAutoMove) return
 
       const cam = renderer.xr.getCamera()
 
@@ -167,16 +142,59 @@ function App() {
     }
 
     // =========================
-    // XR START
+    // TELEPORT
+    // =========================
+    const raycaster = new THREE.Raycaster()
+    const tempMatrix = new THREE.Matrix4()
+
+    function teleport() {
+      if (!environment) return
+
+      tempMatrix.identity().extractRotation(controller.matrixWorld)
+
+      raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld)
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix)
+
+      const hit = raycaster.intersectObject(environment, true)[0]
+
+      if (hit) {
+        const cam = renderer.xr.getCamera()
+        cam.position.set(hit.point.x, hit.point.y + 1.6, hit.point.z)
+      }
+    }
+
+    // =========================
+    // XR START (FIX CHUẨN)
     // =========================
     window.enterVR = async () => {
       try {
         const session = await navigator.xr.requestSession('immersive-vr', {
-          optionalFeatures: ['local-floor']
+          requiredFeatures: ['local-floor']
         })
+
         renderer.xr.setSession(session)
+
+        console.log('✅ VR START')
+
+        // 🔥 bind event tại session (Pico safe)
+        session.addEventListener('selectstart', () => {
+          console.log('selectstart')
+          moving = true
+          fallbackAutoMove = false
+          teleport()
+        })
+
+        session.addEventListener('selectend', () => {
+          console.log('selectend')
+          moving = false
+        })
+
+        session.addEventListener('inputsourceschange', () => {
+          console.log('inputSources:', session.inputSources)
+        })
+
       } catch (e) {
-        console.error(e)
+        console.error('XR FAIL', e)
       }
     }
 
@@ -188,7 +206,7 @@ function App() {
       if (mixer) mixer.update(delta)
 
       if (renderer.xr.isPresenting) {
-        handleMove(delta)
+        moveForward(delta)
       }
 
       controls.update()
@@ -231,10 +249,7 @@ function App() {
       <div className="sidebar" style={{ overflowY: 'auto', maxHeight: '100vh' }}>
         <h3>Models:</h3>
 
-        <button
-          className={active === 'default' ? 'active' : ''}
-          onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}
-        >
+        <button className={active === 'default' ? 'active' : ''} onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}>
           Mặc định
         </button>
 
