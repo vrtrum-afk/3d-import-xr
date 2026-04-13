@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
-import { VRButton } from 'three/examples/jsm/webxr/VRButton.js'
 import './App.css'
 
 function App() {
@@ -23,8 +22,6 @@ function App() {
     const container = mountRef.current
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
-
-    document.body.appendChild(VRButton.createButton(renderer))
 
     renderer.domElement.style.width = '100%'
     renderer.domElement.style.height = '100%'
@@ -69,8 +66,7 @@ function App() {
 
         model.position.set(-center.x, -box.min.y, -center.z)
 
-        const targetHeight = 2
-        const scale = targetHeight / size.y
+        const scale = 2 / size.y
         model.scale.setScalar(scale)
 
         camera.position.set(0, 1.5, 4)
@@ -85,7 +81,7 @@ function App() {
     }
 
     // =========================
-    // ENV (ADD ZOOM x20)
+    // ENV (ZOOM x20)
     // =========================
     let envZoom = 20
 
@@ -115,10 +111,10 @@ function App() {
     }
 
     // =========================
-    // 🔥 VR ADD-ON (KHÔNG PHÁ LEGACY)
+    // 🔥 XR CONTROLLER + MOVEMENT
     // =========================
-    const controller1 = renderer.xr.getController(0)
-    scene.add(controller1)
+    const controller = renderer.xr.getController(0)
+    scene.add(controller)
 
     const raycaster = new THREE.Raycaster()
     const tempMatrix = new THREE.Matrix4()
@@ -142,8 +138,8 @@ function App() {
       }
     }
 
-    controller1.addEventListener('selectstart', () => {
-      if (renderer.xr.isPresenting) teleport(controller1)
+    controller.addEventListener('select', () => {
+      if (renderer.xr.isPresenting) teleport(controller)
     })
 
     function handleVRMovement(delta) {
@@ -157,8 +153,9 @@ function App() {
 
         const axes = source.gamepad.axes
 
-        move.forward = -axes[3] || 0
-        move.right = axes[2] || 0
+        // 🔥 FIX PICO AXES
+        move.forward = -axes[1] || 0
+        move.right = axes[0] || 0
       })
 
       const dir = new THREE.Vector3()
@@ -174,13 +171,34 @@ function App() {
     }
 
     // =========================
-    // LOOP (SAFE)
+    // 🔥 XR START (FIX CHUẨN PICO)
+    // =========================
+    window.enterVR = async () => {
+      if (!navigator.xr) {
+        alert('XR not supported')
+        return
+      }
+
+      try {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor']
+        })
+
+        renderer.xr.setSession(session)
+
+        console.log('✅ VR STARTED')
+      } catch (e) {
+        console.error('❌ VR FAIL', e)
+      }
+    }
+
+    // =========================
+    // LOOP
     // =========================
     renderer.setAnimationLoop(() => {
       const delta = clock.getDelta()
       if (mixer) mixer.update(delta)
 
-      // 🔥 chỉ chạy khi vào VR
       if (renderer.xr.isPresenting) {
         handleVRMovement(delta)
       }
@@ -200,13 +218,9 @@ function App() {
       setActive(key)
     }
 
-    window.loadEnv = (path) => {
-      loadEnvironment(path)
-    }
+    window.loadEnv = (path) => loadEnvironment(path)
 
-    window.updateEnvScale = (v) => {
-      updateEnvScale(v)
-    }
+    window.updateEnvScale = (v) => updateEnvScale(v)
 
     // =========================
     // RESIZE
@@ -282,6 +296,12 @@ function App() {
             window.updateEnvScale(v)
           }}
         />
+
+        <hr />
+
+        <button className="vr-btn" onClick={() => window.enterVR()}>
+          Enter VR
+        </button>
       </div>
     </div>
   )
