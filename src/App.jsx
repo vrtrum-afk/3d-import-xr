@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
+import { VRButton } from 'three/examples/jsm/webxr/VRButton.js'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
 
@@ -25,8 +26,8 @@ function App() {
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
 
-    renderer.domElement.style.width = '100%'
-    renderer.domElement.style.height = '100%'
+    // 🔥 QUAN TRỌNG NHẤT
+    document.body.appendChild(VRButton.createButton(renderer))
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -51,9 +52,6 @@ function App() {
     const loader = new GLTFLoader()
     const clock = new THREE.Clock()
 
-    // =========================
-    // MODEL (GIỮ NGUYÊN)
-    // =========================
     function loadModel(path) {
       loader.load(path, (gltf) => {
         if (currentModel) scene.remove(currentModel)
@@ -82,9 +80,6 @@ function App() {
       })
     }
 
-    // =========================
-    // ENV (ZOOM x20)
-    // =========================
     let envZoom = 20
 
     function loadEnvironment(path) {
@@ -112,7 +107,7 @@ function App() {
     }
 
     // =========================
-    // CONTROLLER (HIỂN THỊ)
+    // CONTROLLER (FULL INPUT)
     // =========================
     const controller = renderer.xr.getController(0)
     scene.add(controller)
@@ -122,28 +117,6 @@ function App() {
     grip.add(factory.createControllerModel(grip))
     scene.add(grip)
 
-    // =========================
-    // MOVEMENT
-    // =========================
-    let moving = false
-    let fallbackAutoMove = true // 🔥 fallback nếu Pico không có input
-
-    function moveForward(delta) {
-      if (!moving && !fallbackAutoMove) return
-
-      const cam = renderer.xr.getCamera()
-
-      const dir = new THREE.Vector3()
-      cam.getWorldDirection(dir)
-      dir.y = 0
-      dir.normalize()
-
-      cam.position.addScaledVector(dir, 2 * delta)
-    }
-
-    // =========================
-    // TELEPORT
-    // =========================
     const raycaster = new THREE.Raycaster()
     const tempMatrix = new THREE.Matrix4()
 
@@ -163,59 +136,47 @@ function App() {
       }
     }
 
-    // =========================
-    // XR START (FIX CHUẨN)
-    // =========================
-    window.enterVR = async () => {
-      try {
-        const session = await navigator.xr.requestSession('immersive-vr', {
-          requiredFeatures: ['local-floor']
-        })
+    function handleVR(delta) {
+      const session = renderer.xr.getSession()
+      if (!session) return
 
-        renderer.xr.setSession(session)
+      const cam = renderer.xr.getCamera()
 
-        console.log('✅ VR START')
+      session.inputSources.forEach((source) => {
+        if (!source.gamepad) return
 
-        // 🔥 bind event tại session (Pico safe)
-        session.addEventListener('selectstart', () => {
-          console.log('selectstart')
-          moving = true
-          fallbackAutoMove = false
-          teleport()
-        })
+        const axes = source.gamepad.axes
 
-        session.addEventListener('selectend', () => {
-          console.log('selectend')
-          moving = false
-        })
+        const forward = -axes[1]
+        const right = axes[0]
 
-        session.addEventListener('inputsourceschange', () => {
-          console.log('inputSources:', session.inputSources)
-        })
+        const dir = new THREE.Vector3()
+        cam.getWorldDirection(dir)
+        dir.y = 0
+        dir.normalize()
 
-      } catch (e) {
-        console.error('XR FAIL', e)
-      }
+        const side = new THREE.Vector3()
+        side.crossVectors(dir, new THREE.Vector3(0, 1, 0))
+
+        cam.position.addScaledVector(dir, forward * 3 * delta)
+        cam.position.addScaledVector(side, right * 3 * delta)
+      })
     }
 
-    // =========================
-    // LOOP
-    // =========================
+    controller.addEventListener('selectstart', teleport)
+
     renderer.setAnimationLoop(() => {
       const delta = clock.getDelta()
       if (mixer) mixer.update(delta)
 
       if (renderer.xr.isPresenting) {
-        moveForward(delta)
+        handleVR(delta)
       }
 
       controls.update()
       renderer.render(scene, camera)
     })
 
-    // =========================
-    // DEFAULT
-    // =========================
     loadModel('/models/avatar.glb')
     loadEnvironment('/env/room1.glb')
 
@@ -295,12 +256,6 @@ function App() {
             window.updateEnvScale(v)
           }}
         />
-
-        <hr />
-
-        <button className="vr-btn" onClick={() => window.enterVR()}>
-          Enter VR
-        </button>
       </div>
     </div>
   )
