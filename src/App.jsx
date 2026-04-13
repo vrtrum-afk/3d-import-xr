@@ -113,28 +113,20 @@ function App() {
     }
 
     // =========================
-    // 🔥 CONTROLLER (FIX PICO)
+    // CONTROLLER (PICO SAFE)
     // =========================
-    const controller1 = renderer.xr.getController(0)
-    const controller2 = renderer.xr.getController(1)
-    scene.add(controller1)
-    scene.add(controller2)
+    const controller = renderer.xr.getController(0)
+    scene.add(controller)
 
-    const controllerModelFactory = new XRControllerModelFactory()
-
-    const grip1 = renderer.xr.getControllerGrip(0)
-    grip1.add(controllerModelFactory.createControllerModel(grip1))
-    scene.add(grip1)
-
-    const grip2 = renderer.xr.getControllerGrip(1)
-    grip2.add(controllerModelFactory.createControllerModel(grip2))
-    scene.add(grip2)
+    const factory = new XRControllerModelFactory()
+    const grip = renderer.xr.getControllerGrip(0)
+    grip.add(factory.createControllerModel(grip))
+    scene.add(grip)
 
     const raycaster = new THREE.Raycaster()
     const tempMatrix = new THREE.Matrix4()
 
-    let move = { forward: 0, right: 0 }
-    const speed = 3
+    let movingForward = false
 
     function teleport(ctrl) {
       if (!environment) return
@@ -152,35 +144,26 @@ function App() {
       }
     }
 
-    controller1.addEventListener('selectstart', () => {
-      teleport(controller1)
+    controller.addEventListener('selectstart', () => {
+      movingForward = true
+      teleport(controller) // bắn tia luôn
     })
 
-    function handleVR(delta) {
-      const session = renderer.xr.getSession()
-      if (!session) return
+    controller.addEventListener('selectend', () => {
+      movingForward = false
+    })
+
+    function handleMove(delta) {
+      if (!movingForward) return
 
       const cam = renderer.xr.getCamera()
-
-      session.inputSources.forEach((source) => {
-        if (!source.gamepad) return
-
-        const axes = source.gamepad.axes
-
-        move.forward = -axes[1] || 0
-        move.right = axes[0] || 0
-      })
 
       const dir = new THREE.Vector3()
       cam.getWorldDirection(dir)
       dir.y = 0
       dir.normalize()
 
-      const right = new THREE.Vector3()
-      right.crossVectors(dir, new THREE.Vector3(0, 1, 0))
-
-      cam.position.addScaledVector(dir, move.forward * speed * delta)
-      cam.position.addScaledVector(right, move.right * speed * delta)
+      cam.position.addScaledVector(dir, 2 * delta)
     }
 
     // =========================
@@ -191,7 +174,6 @@ function App() {
         const session = await navigator.xr.requestSession('immersive-vr', {
           optionalFeatures: ['local-floor']
         })
-
         renderer.xr.setSession(session)
       } catch (e) {
         console.error(e)
@@ -206,7 +188,7 @@ function App() {
       if (mixer) mixer.update(delta)
 
       if (renderer.xr.isPresenting) {
-        handleVR(delta)
+        handleMove(delta)
       }
 
       controls.update()
@@ -249,7 +231,10 @@ function App() {
       <div className="sidebar" style={{ overflowY: 'auto', maxHeight: '100vh' }}>
         <h3>Models:</h3>
 
-        <button className={active === 'default' ? 'active' : ''} onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}>
+        <button
+          className={active === 'default' ? 'active' : ''}
+          onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}
+        >
           Mặc định
         </button>
 
@@ -273,8 +258,13 @@ function App() {
 
         <h3>Background</h3>
 
-        <button onClick={() => window.loadEnv('/env/room1.glb')}>Room 1</button>
-        <button onClick={() => window.loadEnv('/env/room2.glb')}>Room 2</button>
+        <button onClick={() => window.loadEnv('/env/room1.glb')}>
+          Room 1
+        </button>
+
+        <button onClick={() => window.loadEnv('/env/room2.glb')}>
+          Room 2
+        </button>
 
         <hr />
 
