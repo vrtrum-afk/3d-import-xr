@@ -25,9 +25,6 @@ function App() {
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
 
-    renderer.domElement.style.width = '100%'
-    renderer.domElement.style.height = '100%'
-
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
 
@@ -51,9 +48,7 @@ function App() {
     const loader = new GLTFLoader()
     const clock = new THREE.Clock()
 
-    // =========================
-    // MODEL (GIỮ NGUYÊN)
-    // =========================
+    // ================= MODEL =================
     function loadModel(path) {
       loader.load(path, (gltf) => {
         if (currentModel) scene.remove(currentModel)
@@ -68,8 +63,7 @@ function App() {
 
         model.position.set(-center.x, -box.min.y, -center.z)
 
-        const targetHeight = 2
-        const scale = targetHeight / size.y
+        const scale = 2 / size.y
         model.scale.setScalar(scale)
 
         camera.position.set(0, 1.5, 4)
@@ -83,9 +77,7 @@ function App() {
       })
     }
 
-    // =========================
-    // ENV (ZOOM x20)
-    // =========================
+    // ================= ENV =================
     let envZoom = 20
 
     function loadEnvironment(path) {
@@ -112,9 +104,7 @@ function App() {
       if (environment) loadEnvironment('/env/room1.glb')
     }
 
-    // =========================
-    // CONTROLLER
-    // =========================
+    // ================= CONTROLLER =================
     const controller = renderer.xr.getController(0)
     scene.add(controller)
 
@@ -142,77 +132,97 @@ function App() {
       }
     }
 
-    controller.addEventListener('selectstart', teleport)
+    // ================= INPUT STATE =================
+    let moving = false
+    let lastInputTime = 0
 
-    function handleVR(delta) {
-      const session = renderer.xr.getSession()
-      if (!session) return
+    controller.addEventListener('selectstart', () => {
+      moving = true
+      lastInputTime = performance.now()
+      teleport()
+    })
 
+    controller.addEventListener('selectend', () => {
+      moving = false
+    })
+
+    // ================= HYBRID MOVEMENT =================
+    function handleMovement(delta) {
       const cam = renderer.xr.getCamera()
+      const session = renderer.xr.getSession()
 
-      session.inputSources.forEach((source) => {
-        if (!source.gamepad) return
+      let usedGamepad = false
 
-        const axes = source.gamepad.axes || [0, 0]
+      if (session) {
+        session.inputSources.forEach((source) => {
+          if (source.gamepad && source.gamepad.axes.length >= 2) {
+            const axes = source.gamepad.axes
+            const forward = -axes[1]
+            const right = axes[0]
 
-        const forward = -axes[1]
-        const right = axes[0]
+            if (Math.abs(forward) > 0.1 || Math.abs(right) > 0.1) {
+              usedGamepad = true
+              lastInputTime = performance.now()
 
+              const dir = new THREE.Vector3()
+              cam.getWorldDirection(dir)
+              dir.y = 0
+              dir.normalize()
+
+              const side = new THREE.Vector3()
+              side.crossVectors(dir, new THREE.Vector3(0, 1, 0))
+
+              cam.position.addScaledVector(dir, forward * 3 * delta)
+              cam.position.addScaledVector(side, right * 3 * delta)
+            }
+          }
+        })
+      }
+
+      // fallback trigger move
+      if (moving && !usedGamepad) {
         const dir = new THREE.Vector3()
         cam.getWorldDirection(dir)
         dir.y = 0
         dir.normalize()
 
-        const side = new THREE.Vector3()
-        side.crossVectors(dir, new THREE.Vector3(0, 1, 0))
+        cam.position.addScaledVector(dir, 2 * delta)
+      }
 
-        cam.position.addScaledVector(dir, forward * 3 * delta)
-        cam.position.addScaledVector(side, right * 3 * delta)
-      })
-    }
+      // fallback gaze auto move
+      const now = performance.now()
+      if (!usedGamepad && !moving && now - lastInputTime > 2000) {
+        const dir = new THREE.Vector3()
+        cam.getWorldDirection(dir)
+        dir.y = 0
+        dir.normalize()
 
-    // =========================
-    // XR START (QUAN TRỌNG NHẤT)
-    // =========================
-    window.enterVR = async () => {
-      try {
-        const session = await navigator.xr.requestSession('immersive-vr', {
-          optionalFeatures: [
-            'local-floor',
-            'bounded-floor',
-            'hand-tracking',
-            'layers'
-          ]
-        })
-
-        renderer.xr.setSession(session)
-
-        console.log('XR STARTED', session)
-        console.log('inputSources', session.inputSources)
-
-      } catch (e) {
-        console.error('XR ERROR', e)
+        cam.position.addScaledVector(dir, 0.5 * delta)
       }
     }
 
-    // =========================
-    // LOOP
-    // =========================
+    // ================= XR =================
+    window.enterVR = async () => {
+      const session = await navigator.xr.requestSession('immersive-vr', {
+        optionalFeatures: ['local-floor', 'bounded-floor']
+      })
+      renderer.xr.setSession(session)
+    }
+
+    // ================= LOOP =================
     renderer.setAnimationLoop(() => {
       const delta = clock.getDelta()
       if (mixer) mixer.update(delta)
 
       if (renderer.xr.isPresenting) {
-        handleVR(delta)
+        handleMovement(delta)
       }
 
       controls.update()
       renderer.render(scene, camera)
     })
 
-    // =========================
-    // DEFAULT
-    // =========================
+    // ================= INIT =================
     loadModel('/models/avatar.glb')
     loadEnvironment('/env/room1.glb')
 
