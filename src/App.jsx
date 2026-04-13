@@ -8,7 +8,7 @@ import './App.css'
 function App() {
   const mountRef = useRef(null)
   const [active, setActive] = useState('default')
-  const [envScaleUI, setEnvScaleUI] = useState(10)
+  const [envScaleUI, setEnvScaleUI] = useState(20)
 
   useEffect(() => {
     const scene = new THREE.Scene()
@@ -23,6 +23,7 @@ function App() {
     const container = mountRef.current
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
+
     document.body.appendChild(VRButton.createButton(renderer))
 
     renderer.domElement.style.width = '100%'
@@ -44,85 +45,15 @@ function App() {
     floor.rotation.x = -Math.PI / 2
     scene.add(floor)
 
-    const loader = new GLTFLoader()
-    const clock = new THREE.Clock()
-
     let mixer = null
     let currentModel = null
     let environment = null
 
-    // 🔥 GLOBAL STATE
-    let modelHeight = 2
-    let envZoom = 10
-    let envBaseSize = null
-    let envGroundOffset = 0
-
-    const raycaster = new THREE.Raycaster()
+    const loader = new GLTFLoader()
+    const clock = new THREE.Clock()
 
     // =========================
-    // 🔥 MODEL NORMALIZE
-    // =========================
-    function normalizeModel(model) {
-      model.scale.set(1, 1, 1)
-
-      const box = new THREE.Box3().setFromObject(model)
-      const size = box.getSize(new THREE.Vector3())
-      const center = box.getCenter(new THREE.Vector3())
-
-      const minY = box.min.y
-
-      model.position.set(-center.x, -minY, -center.z)
-
-      const targetHeight = 2
-      const scale = targetHeight / size.y
-      model.scale.setScalar(scale)
-
-      modelHeight = targetHeight
-    }
-
-    // =========================
-    // 🔥 ENV NORMALIZE
-    // =========================
-    function normalizeEnvironment(env) {
-      if (!envBaseSize) return
-
-      const targetSize = modelHeight * envZoom
-      const scale = targetSize / Math.max(envBaseSize.x, envBaseSize.z)
-
-      env.scale.setScalar(scale)
-
-      env.position.x = 0
-      env.position.z = 0
-
-      env.position.y = -envGroundOffset * scale
-    }
-
-    function updateEnvScale(v) {
-      envZoom = v
-      if (environment) normalizeEnvironment(environment)
-    }
-
-    // =========================
-    // 🔥 RAYCAST GROUNDING (PRO)
-    // =========================
-    function groundModelToEnvironment() {
-      if (!currentModel || !environment) return
-
-      const origin = new THREE.Vector3(0, 5, 0) // bắn từ trên xuống
-      const direction = new THREE.Vector3(0, -1, 0)
-
-      raycaster.set(origin, direction)
-
-      const intersects = raycaster.intersectObject(environment, true)
-
-      if (intersects.length > 0) {
-        const hit = intersects[0]
-        currentModel.position.y = hit.point.y
-      }
-    }
-
-    // =========================
-    // 🔥 LOAD MODEL
+    // MODEL (GIỮ NGUYÊN)
     // =========================
     function loadModel(path) {
       loader.load(path, (gltf) => {
@@ -130,18 +61,17 @@ function App() {
 
         const model = gltf.scene
         currentModel = model
-
-        normalizeModel(model)
         scene.add(model)
 
-        if (environment) {
-          normalizeEnvironment(environment)
+        const box = new THREE.Box3().setFromObject(model)
+        const size = box.getSize(new THREE.Vector3())
+        const center = box.getCenter(new THREE.Vector3())
 
-          // 🔥 grounding chuẩn
-          setTimeout(() => {
-            groundModelToEnvironment()
-          }, 50)
-        }
+        model.position.set(-center.x, -box.min.y, -center.z)
+
+        const targetHeight = 2
+        const scale = targetHeight / size.y
+        model.scale.setScalar(scale)
 
         camera.position.set(0, 1.5, 4)
         controls.target.set(0, 1, 0)
@@ -155,45 +85,116 @@ function App() {
     }
 
     // =========================
-    // 🔥 LOAD ENV
+    // ENV (ADD ZOOM x20)
     // =========================
+    let envZoom = 20
+
     function loadEnvironment(path) {
       loader.load(path, (gltf) => {
         if (environment) scene.remove(environment)
 
         environment = gltf.scene
 
-        environment.scale.set(1, 1, 1)
-
         const box = new THREE.Box3().setFromObject(environment)
         const size = box.getSize(new THREE.Vector3())
         const center = box.getCenter(new THREE.Vector3())
 
-        envBaseSize = size.clone()
-        envGroundOffset = box.min.y
+        environment.position.set(-center.x, -box.min.y, -center.z)
 
-        environment.position.set(-center.x, -envGroundOffset, -center.z)
-
-        normalizeEnvironment(environment)
+        const targetSize = 2 * envZoom
+        const scale = targetSize / Math.max(size.x, size.z)
+        environment.scale.setScalar(scale)
 
         scene.add(environment)
-
-        // 🔥 grounding lại model
-        setTimeout(() => {
-          groundModelToEnvironment()
-        }, 50)
       })
     }
 
+    function updateEnvScale(v) {
+      envZoom = v
+      if (environment) loadEnvironment('/env/room1.glb')
+    }
+
     // =========================
-    // 🔥 DEFAULT
+    // 🔥 VR ADD-ON (KHÔNG PHÁ LEGACY)
+    // =========================
+    const controller1 = renderer.xr.getController(0)
+    scene.add(controller1)
+
+    const raycaster = new THREE.Raycaster()
+    const tempMatrix = new THREE.Matrix4()
+
+    let move = { forward: 0, right: 0 }
+    const speed = 3
+
+    function teleport(ctrl) {
+      if (!environment) return
+
+      tempMatrix.identity().extractRotation(ctrl.matrixWorld)
+
+      raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld)
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix)
+
+      const hit = raycaster.intersectObject(environment, true)[0]
+
+      if (hit) {
+        const xrCam = renderer.xr.getCamera()
+        xrCam.position.set(hit.point.x, hit.point.y + 1.6, hit.point.z)
+      }
+    }
+
+    controller1.addEventListener('selectstart', () => {
+      if (renderer.xr.isPresenting) teleport(controller1)
+    })
+
+    function handleVRMovement(delta) {
+      const session = renderer.xr.getSession()
+      if (!session) return
+
+      const xrCam = renderer.xr.getCamera()
+
+      session.inputSources.forEach((source) => {
+        if (!source.gamepad) return
+
+        const axes = source.gamepad.axes
+
+        move.forward = -axes[3] || 0
+        move.right = axes[2] || 0
+      })
+
+      const dir = new THREE.Vector3()
+      xrCam.getWorldDirection(dir)
+      dir.y = 0
+      dir.normalize()
+
+      const right = new THREE.Vector3()
+      right.crossVectors(dir, new THREE.Vector3(0, 1, 0))
+
+      xrCam.position.addScaledVector(dir, move.forward * speed * delta)
+      xrCam.position.addScaledVector(right, move.right * speed * delta)
+    }
+
+    // =========================
+    // LOOP (SAFE)
+    // =========================
+    renderer.setAnimationLoop(() => {
+      const delta = clock.getDelta()
+      if (mixer) mixer.update(delta)
+
+      // 🔥 chỉ chạy khi vào VR
+      if (renderer.xr.isPresenting) {
+        handleVRMovement(delta)
+      }
+
+      controls.update()
+      renderer.render(scene, camera)
+    })
+
+    // =========================
+    // DEFAULT
     // =========================
     loadModel('/models/avatar.glb')
     loadEnvironment('/env/room1.glb')
 
-    // =========================
-    // 🔥 LEGACY API
-    // =========================
     window.loadAvatar = (path, key) => {
       loadModel(path)
       setActive(key)
@@ -208,7 +209,7 @@ function App() {
     }
 
     // =========================
-    // 🔥 RESIZE
+    // RESIZE
     // =========================
     function resize() {
       const width = container.clientWidth
@@ -221,14 +222,6 @@ function App() {
 
     resize()
     window.addEventListener('resize', resize)
-
-    renderer.setAnimationLoop(() => {
-      const delta = clock.getDelta()
-      if (mixer) mixer.update(delta)
-
-      controls.update()
-      renderer.render(scene, camera)
-    })
   }, [])
 
   return (
@@ -277,12 +270,11 @@ function App() {
 
         <hr />
 
-        <h4>Env Zoom (default = 10x)</h4>
+        <h4>Zoom x20</h4>
         <input
           type="range"
-          min="1"
-          max="20"
-          step="0.1"
+          min="5"
+          max="50"
           value={envScaleUI}
           onChange={(e) => {
             const v = parseFloat(e.target.value)
@@ -290,12 +282,6 @@ function App() {
             window.updateEnvScale(v)
           }}
         />
-
-        <hr />
-
-        <button className="vr-btn">
-          Enter VR
-        </button>
       </div>
     </div>
   )
