@@ -8,7 +8,7 @@ import './App.css'
 function App() {
   const mountRef = useRef(null)
   const [active, setActive] = useState('default')
-  const [envScaleUI, setEnvScaleUI] = useState(20)
+  const [envScaleUI, setEnvScaleUI] = useState(25)
 
   useEffect(() => {
     const scene = new THREE.Scene()
@@ -41,11 +41,6 @@ function App() {
     floor.rotation.x = -Math.PI / 2
     scene.add(floor)
 
-    // ================= PLAYER RIG =================
-    // Điểm mấu chốt: trong WebXR KHÔNG được move camera trực tiếp.
-    // XR override camera position mỗi frame từ tracking data của kính.
-    // Phải tạo Group (playerRig) làm "thân người", add camera + controllers vào.
-    // Muốn di chuyển → dịch chuyển playerRig, XR tự offset camera theo.
     const playerRig = new THREE.Group()
     playerRig.position.set(0, 0, 3)
     scene.add(playerRig)
@@ -85,7 +80,7 @@ function App() {
     }
 
     // ================= ENV =================
-    let envZoom = 20
+    let envZoom = 25
     let lastEnvPath = '/env/room1.glb'
 
     function loadEnvironment(path) {
@@ -94,14 +89,33 @@ function App() {
         if (environment) scene.remove(environment)
         environment = gltf.scene
 
+        // Ẩn floor và grid vì env có sàn riêng
+        floor.visible = false
+        grid.visible = false
+
         const box = new THREE.Box3().setFromObject(environment)
         const size = box.getSize(new THREE.Vector3())
-        const center = box.getCenter(new THREE.Vector3())
 
-        environment.position.set(-center.x, -box.min.y, -center.z)
-        environment.scale.setScalar((2 * envZoom) / Math.max(size.x, size.z))
+        const envMaxHorizontal = Math.max(size.x, size.z)
+        environment.scale.setScalar((2 * envZoom) / envMaxHorizontal)
 
+        environment.updateMatrixWorld(true)
+        const scaledBox = new THREE.Box3().setFromObject(environment)
+        const scaledCenter = scaledBox.getCenter(new THREE.Vector3())
+
+        environment.position.set(-scaledCenter.x, -scaledBox.min.y, -scaledCenter.z)
         scene.add(environment)
+        environment.updateMatrixWorld(true)
+
+        // Raycast từ trên xuống tại tâm XZ để tìm mặt đất thực
+        const groundRay = new THREE.Raycaster()
+        groundRay.ray.origin.set(0, 1000, 0)
+        groundRay.ray.direction.set(0, -1, 0)
+        const hits = groundRay.intersectObject(environment, true)
+
+        if (hits.length > 0) {
+          environment.position.y += -hits[0].point.y - 0.02
+        }
       })
     }
 
@@ -111,8 +125,6 @@ function App() {
     }
 
     // ================= CONTROLLERS =================
-    // Controllers phải add vào playerRig (không phải scene)
-    // để khi rig dịch chuyển, tay controller cũng dịch theo
     const factory = new XRControllerModelFactory()
 
     const controller0 = renderer.xr.getController(0)
@@ -127,7 +139,6 @@ function App() {
     playerRig.add(grip0)
     playerRig.add(grip1)
 
-    // Ray line để thấy hướng bắn tia teleport
     const rayGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(0, 0, -8)
@@ -151,7 +162,6 @@ function App() {
 
       if (hits.length > 0) {
         const hit = hits[0].point
-        // Tính offset của đầu so với rig để giữ đúng vị trí head
         const xrCam = renderer.xr.getCamera()
         const headWorld = new THREE.Vector3()
         headWorld.setFromMatrixPosition(xrCam.matrixWorld)
@@ -164,8 +174,6 @@ function App() {
     }
 
     // ================= GAMEPAD POLLING =================
-    // PICO 4 không fire events selectstart/squeeze ổn định khi isPresenting
-    // Phải poll gamepad.buttons mỗi frame và so sánh với frame trước
     const prevButtonState = { 0: [], 1: [] }
 
     function wasJustPressed(curr, prev, btnIndex) {
@@ -173,8 +181,6 @@ function App() {
     }
 
     // ================= XR MOVEMENT =================
-    // Hướng di chuyển lấy từ góc nhìn của xrCamera (head)
-    // nhưng áp dụng lên playerRig — KHÔNG áp dụng lên camera
     function handleXRMovement(delta) {
       const session = renderer.xr.getSession()
       if (!session) return
@@ -189,12 +195,6 @@ function App() {
         const prev = prevButtonState[idx] || []
         const curr = Array.from(gp.buttons).map(b => ({ pressed: b.pressed, value: b.value }))
 
-        // ---- THUMBSTICK ----
-        // PICO 4 WebXR axes layout:
-        // axes[0] = touchpad X  (không dùng)
-        // axes[1] = touchpad Y  (không dùng)
-        // axes[2] = thumbstick X  ← dùng cái này
-        // axes[3] = thumbstick Y  ← và cái này
         const axes = gp.axes
         let stickX = 0
         let stickY = 0
@@ -204,14 +204,12 @@ function App() {
           if (Math.abs(axes[2]) > DEAD) stickX = axes[2]
           if (Math.abs(axes[3]) > DEAD) stickY = axes[3]
         }
-        // Fallback cho firmware cũ hoặc layout axes khác
         if (stickX === 0 && stickY === 0 && axes.length >= 2) {
           if (Math.abs(axes[0]) > DEAD) stickX = axes[0]
           if (Math.abs(axes[1]) > DEAD) stickY = axes[1]
         }
 
         if (stickX !== 0 || stickY !== 0) {
-          // Lấy hướng nhìn từ xrCamera, flatten XZ
           const lookDir = new THREE.Vector3()
           xrCam.getWorldDirection(lookDir)
           lookDir.y = 0
@@ -220,13 +218,11 @@ function App() {
           const rightDir = new THREE.Vector3()
           rightDir.crossVectors(lookDir, new THREE.Vector3(0, 1, 0)).normalize()
 
-          // Di chuyển playerRig (KHÔNG phải camera)
           const speed = 3 * delta
           playerRig.position.addScaledVector(lookDir, -stickY * speed)
           playerRig.position.addScaledVector(rightDir, stickX * speed)
         }
 
-        // ---- TRIGGER (button[0]) → teleport ----
         if (wasJustPressed(curr, prev, 0)) {
           const ctrl = idx === 0 ? controller0 : controller1
           teleportFromController(ctrl)
@@ -327,14 +323,14 @@ function App() {
 
         <hr />
 
-        <h3>Background</h3>
+        <h3>Backgrounds:</h3>
 
         <button onClick={() => window.loadEnv('/env/room1.glb')}>
-          Room 1
+          Công viên
         </button>
 
         <button onClick={() => window.loadEnv('/env/room2.glb')}>
-          Room 2
+          Núi đá
         </button>
 
         <hr />
