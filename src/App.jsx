@@ -41,6 +41,16 @@ function App() {
     floor.rotation.x = -Math.PI / 2
     scene.add(floor)
 
+    // ================= PLAYER RIG =================
+    // Điểm mấu chốt: trong WebXR KHÔNG được move camera trực tiếp.
+    // XR override camera position mỗi frame từ tracking data của kính.
+    // Phải tạo Group (playerRig) làm "thân người", add camera + controllers vào.
+    // Muốn di chuyển → dịch chuyển playerRig, XR tự offset camera theo.
+    const playerRig = new THREE.Group()
+    playerRig.position.set(0, 0, 3)
+    scene.add(playerRig)
+    playerRig.add(camera)
+
     let mixer = null
     let currentModel = null
     let environment = null
@@ -52,7 +62,6 @@ function App() {
     function loadModel(path) {
       loader.load(path, (gltf) => {
         if (currentModel) scene.remove(currentModel)
-
         const model = gltf.scene
         currentModel = model
         scene.add(model)
@@ -62,9 +71,7 @@ function App() {
         const center = box.getCenter(new THREE.Vector3())
 
         model.position.set(-center.x, -box.min.y, -center.z)
-
-        const scale = 2 / size.y
-        model.scale.setScalar(scale)
+        model.scale.setScalar(2 / size.y)
 
         camera.position.set(0, 1.5, 4)
         controls.target.set(0, 1, 0)
@@ -79,11 +86,12 @@ function App() {
 
     // ================= ENV =================
     let envZoom = 20
+    let lastEnvPath = '/env/room1.glb'
 
     function loadEnvironment(path) {
+      lastEnvPath = path
       loader.load(path, (gltf) => {
         if (environment) scene.remove(environment)
-
         environment = gltf.scene
 
         const box = new THREE.Box3().setFromObject(environment)
@@ -91,9 +99,7 @@ function App() {
         const center = box.getCenter(new THREE.Vector3())
 
         environment.position.set(-center.x, -box.min.y, -center.z)
-
-        const scale = (2 * envZoom) / Math.max(size.x, size.z)
-        environment.scale.setScalar(scale)
+        environment.scale.setScalar((2 * envZoom) / Math.max(size.x, size.z))
 
         scene.add(environment)
       })
@@ -101,28 +107,30 @@ function App() {
 
     function updateEnvScale(v) {
       envZoom = v
-      if (environment) loadEnvironment('/env/room1.glb')
+      if (environment) loadEnvironment(lastEnvPath)
     }
 
-    // ================= CONTROLLERS (cả 2) =================
+    // ================= CONTROLLERS =================
+    // Controllers phải add vào playerRig (không phải scene)
+    // để khi rig dịch chuyển, tay controller cũng dịch theo
     const factory = new XRControllerModelFactory()
 
     const controller0 = renderer.xr.getController(0)
     const controller1 = renderer.xr.getController(1)
-    scene.add(controller0)
-    scene.add(controller1)
+    playerRig.add(controller0)
+    playerRig.add(controller1)
 
     const grip0 = renderer.xr.getControllerGrip(0)
     const grip1 = renderer.xr.getControllerGrip(1)
     grip0.add(factory.createControllerModel(grip0))
     grip1.add(factory.createControllerModel(grip1))
-    scene.add(grip0)
-    scene.add(grip1)
+    playerRig.add(grip0)
+    playerRig.add(grip1)
 
-    // Ray line visual để thấy hướng bắn tia
+    // Ray line để thấy hướng bắn tia teleport
     const rayGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, -5)
+      new THREE.Vector3(0, 0, -8)
     ])
     const rayMat = new THREE.LineBasicMaterial({ color: 0x00ffff })
     controller0.add(new THREE.Line(rayGeo, rayMat))
@@ -133,102 +141,115 @@ function App() {
 
     // ================= TELEPORT =================
     function teleportFromController(ctrl) {
-      if (!environment) return
-
       tempMatrix.identity().extractRotation(ctrl.matrixWorld)
       raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld)
       raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix)
 
-      const hits = raycaster.intersectObject(environment, true)
+      const targets = [floor]
+      if (environment) targets.push(environment)
+      const hits = raycaster.intersectObjects(targets, true)
+
       if (hits.length > 0) {
-        const cam = renderer.xr.getCamera()
-        cam.position.set(hits[0].point.x, hits[0].point.y + 1.6, hits[0].point.z)
+        const hit = hits[0].point
+        // Tính offset của đầu so với rig để giữ đúng vị trí head
+        const xrCam = renderer.xr.getCamera()
+        const headWorld = new THREE.Vector3()
+        headWorld.setFromMatrixPosition(xrCam.matrixWorld)
+        const headOffsetX = headWorld.x - playerRig.position.x
+        const headOffsetZ = headWorld.z - playerRig.position.z
+
+        playerRig.position.x = hit.x - headOffsetX
+        playerRig.position.z = hit.z - headOffsetZ
       }
     }
 
-    // ================= INPUT STATE =================
-    // Poll button state thay vì dùng events (PICO events không reliable)
-    const prevButtons = { 0: [], 1: [] }
+    // ================= GAMEPAD POLLING =================
+    // PICO 4 không fire events selectstart/squeeze ổn định khi isPresenting
+    // Phải poll gamepad.buttons mỗi frame và so sánh với frame trước
+    const prevButtonState = { 0: [], 1: [] }
 
-    function wasJustPressed(currBtns, prevBtns, index) {
-      return !!(currBtns[index]?.pressed && !prevBtns[index]?.pressed)
+    function wasJustPressed(curr, prev, btnIndex) {
+      return !!(curr[btnIndex]?.pressed && !prev[btnIndex]?.pressed)
     }
 
-    // ================= HYBRID MOVEMENT =================
-    function handleMovement(delta) {
-      const cam = renderer.xr.getCamera()
+    // ================= XR MOVEMENT =================
+    // Hướng di chuyển lấy từ góc nhìn của xrCamera (head)
+    // nhưng áp dụng lên playerRig — KHÔNG áp dụng lên camera
+    function handleXRMovement(delta) {
       const session = renderer.xr.getSession()
       if (!session) return
+
+      const xrCam = renderer.xr.getCamera()
 
       session.inputSources.forEach((source) => {
         const gp = source.gamepad
         if (!gp) return
 
-        // Xác định index controller (left=0, right=1)
         const idx = source.handedness === 'left' ? 0 : 1
-        const prevBtns = prevButtons[idx] || []
-        const currBtns = [...gp.buttons].map(b => ({ pressed: b.pressed, value: b.value }))
+        const prev = prevButtonState[idx] || []
+        const curr = Array.from(gp.buttons).map(b => ({ pressed: b.pressed, value: b.value }))
 
-        // ---- PICO 4 Axes Layout ----
-        // axes[0], axes[1] = touchpad (ít dùng)
-        // axes[2], axes[3] = thumbstick X/Y  <-- chính xác cho PICO 4
-        // Fallback về [0],[1] nếu axes ngắn hơn 4
+        // ---- THUMBSTICK ----
+        // PICO 4 WebXR axes layout:
+        // axes[0] = touchpad X  (không dùng)
+        // axes[1] = touchpad Y  (không dùng)
+        // axes[2] = thumbstick X  ← dùng cái này
+        // axes[3] = thumbstick Y  ← và cái này
         const axes = gp.axes
         let stickX = 0
         let stickY = 0
+        const DEAD = 0.15
 
         if (axes.length >= 4) {
-          stickX = Math.abs(axes[2]) > 0.12 ? axes[2] : 0
-          stickY = Math.abs(axes[3]) > 0.12 ? axes[3] : 0
-          // Fallback nếu axes[2/3] đều 0
-          if (stickX === 0 && stickY === 0) {
-            stickX = Math.abs(axes[0]) > 0.12 ? axes[0] : 0
-            stickY = Math.abs(axes[1]) > 0.12 ? axes[1] : 0
-          }
-        } else if (axes.length >= 2) {
-          stickX = Math.abs(axes[0]) > 0.12 ? axes[0] : 0
-          stickY = Math.abs(axes[1]) > 0.12 ? axes[1] : 0
+          if (Math.abs(axes[2]) > DEAD) stickX = axes[2]
+          if (Math.abs(axes[3]) > DEAD) stickY = axes[3]
+        }
+        // Fallback cho firmware cũ hoặc layout axes khác
+        if (stickX === 0 && stickY === 0 && axes.length >= 2) {
+          if (Math.abs(axes[0]) > DEAD) stickX = axes[0]
+          if (Math.abs(axes[1]) > DEAD) stickY = axes[1]
         }
 
-        // Di chuyển bằng thumbstick
-        const forward = -stickY
-        const right = stickX
+        if (stickX !== 0 || stickY !== 0) {
+          // Lấy hướng nhìn từ xrCamera, flatten XZ
+          const lookDir = new THREE.Vector3()
+          xrCam.getWorldDirection(lookDir)
+          lookDir.y = 0
+          lookDir.normalize()
 
-        if (Math.abs(forward) > 0 || Math.abs(right) > 0) {
-          const dir = new THREE.Vector3()
-          cam.getWorldDirection(dir)
-          dir.y = 0
-          dir.normalize()
+          const rightDir = new THREE.Vector3()
+          rightDir.crossVectors(lookDir, new THREE.Vector3(0, 1, 0)).normalize()
 
-          const side = new THREE.Vector3()
-          side.crossVectors(dir, new THREE.Vector3(0, 1, 0))
-
-          cam.position.addScaledVector(dir, forward * 3 * delta)
-          cam.position.addScaledVector(side, right * 3 * delta)
+          // Di chuyển playerRig (KHÔNG phải camera)
+          const speed = 3 * delta
+          playerRig.position.addScaledVector(lookDir, -stickY * speed)
+          playerRig.position.addScaledVector(rightDir, stickX * speed)
         }
 
-        // ---- Teleport bằng Trigger (button index 0) ----
-        // PICO 4: button[0] = trigger, button[1] = grip/squeeze
-        if (wasJustPressed(currBtns, prevBtns, 0)) {
+        // ---- TRIGGER (button[0]) → teleport ----
+        if (wasJustPressed(curr, prev, 0)) {
           const ctrl = idx === 0 ? controller0 : controller1
           teleportFromController(ctrl)
         }
 
-        // Cập nhật trạng thái button frame trước
-        prevButtons[idx] = currBtns
+        prevButtonState[idx] = curr
       })
     }
 
-    // ================= XR =================
+    // ================= ENTER VR =================
     window.enterVR = async () => {
+      if (!navigator.xr) {
+        alert('WebXR không được hỗ trợ trên trình duyệt này')
+        return
+      }
       try {
         const session = await navigator.xr.requestSession('immersive-vr', {
           optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
         })
         renderer.xr.setSession(session)
       } catch (err) {
-        console.error('VR session error:', err)
-        alert('Không thể khởi động VR: ' + err.message)
+        console.error('VR error:', err)
+        alert('Không thể vào VR: ' + err.message)
       }
     }
 
@@ -238,10 +259,11 @@ function App() {
       if (mixer) mixer.update(delta)
 
       if (renderer.xr.isPresenting) {
-        handleMovement(delta)
+        handleXRMovement(delta)
+      } else {
+        controls.update()
       }
 
-      controls.update()
       renderer.render(scene, camera)
     })
 
@@ -253,15 +275,14 @@ function App() {
       loadModel(path)
       setActive(key)
     }
-
     window.loadEnv = (path) => loadEnvironment(path)
     window.updateEnvScale = (v) => updateEnvScale(v)
 
     function resize() {
-      const width = container.clientWidth
-      const height = container.clientHeight
-      renderer.setSize(width, height, false)
-      camera.aspect = width / height
+      const w = container.clientWidth
+      const h = container.clientHeight
+      renderer.setSize(w, h, false)
+      camera.aspect = w / h
       camera.updateProjectionMatrix()
     }
 
@@ -270,6 +291,7 @@ function App() {
 
     return () => {
       window.removeEventListener('resize', resize)
+      renderer.setAnimationLoop(null)
       renderer.dispose()
     }
   }, [])
