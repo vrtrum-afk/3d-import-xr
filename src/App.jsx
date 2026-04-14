@@ -7,7 +7,8 @@ import './App.css'
 
 function App() {
   const mountRef = useRef(null)
-  const [active, setActive] = useState('default')
+  const [activeModel, setActiveModel] = useState('default')
+  const [activeEnv, setActiveEnv] = useState('room1')
   const [envScaleUI, setEnvScaleUI] = useState(25)
 
   useEffect(() => {
@@ -24,6 +25,10 @@ function App() {
     const container = mountRef.current
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
+
+    renderer.domElement.style.display = 'block'
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -89,7 +94,6 @@ function App() {
         if (environment) scene.remove(environment)
         environment = gltf.scene
 
-        // Ẩn floor và grid vì env có sàn riêng
         floor.visible = false
         grid.visible = false
 
@@ -107,7 +111,6 @@ function App() {
         scene.add(environment)
         environment.updateMatrixWorld(true)
 
-        // Raycast từ trên xuống tại tâm XZ để tìm mặt đất thực
         const groundRay = new THREE.Raycaster()
         groundRay.ray.origin.set(0, 1000, 0)
         groundRay.ray.direction.set(0, -1, 0)
@@ -249,6 +252,17 @@ function App() {
       }
     }
 
+    // ================= RESIZE =================
+    function resize() {
+      const rect = container.getBoundingClientRect()
+      const w = Math.floor(rect.width)
+      const h = Math.floor(rect.height)
+      if (w === 0 || h === 0) return
+      renderer.setSize(w, h, false)
+      camera.aspect = w / h
+      camera.updateProjectionMatrix()
+    }
+
     // ================= LOOP =================
     renderer.setAnimationLoop(() => {
       const delta = clock.getDelta()
@@ -269,23 +283,21 @@ function App() {
 
     window.loadAvatar = (path, key) => {
       loadModel(path)
-      setActive(key)
+      setActiveModel(key)
     }
-    window.loadEnv = (path) => loadEnvironment(path)
+    window.loadEnv = (path, key) => {
+      loadEnvironment(path)
+      setActiveEnv(key)
+    }
     window.updateEnvScale = (v) => updateEnvScale(v)
 
-    function resize() {
-      const w = container.clientWidth
-      const h = container.clientHeight
-      renderer.setSize(w, h, false)
-      camera.aspect = w / h
-      camera.updateProjectionMatrix()
-    }
-
     resize()
+    const ro = new ResizeObserver(() => resize())
+    ro.observe(container)
     window.addEventListener('resize', resize)
 
     return () => {
+      ro.disconnect()
       window.removeEventListener('resize', resize)
       renderer.setAnimationLoop(null)
       renderer.dispose()
@@ -298,26 +310,41 @@ function App() {
         <div ref={mountRef} className="canvas"></div>
       </div>
 
-      <div className="sidebar" style={{ overflowY: 'auto', maxHeight: '100vh' }}>
+      <div className="sidebar">
         <h3>Models:</h3>
 
-        <button className={active === 'default' ? 'active' : ''} onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}>
+        <button
+          className={activeModel === 'default' ? 'active' : ''}
+          onClick={() => window.loadAvatar('/models/avatar.glb', 'default')}
+        >
           Mặc định
         </button>
 
-        <button onClick={() => window.loadAvatar('/models/avatar1.glb', 'a1')}>
+        <button
+          className={activeModel === 'a1' ? 'active' : ''}
+          onClick={() => window.loadAvatar('/models/avatar1.glb', 'a1')}
+        >
           Người đàn ông đang đợi
         </button>
 
-        <button onClick={() => window.loadAvatar('/models/avatar2.glb', 'a2')}>
+        <button
+          className={activeModel === 'a2' ? 'active' : ''}
+          onClick={() => window.loadAvatar('/models/avatar2.glb', 'a2')}
+        >
           Cô gái đang chụp ảnh
         </button>
 
-        <button onClick={() => window.loadAvatar('/models/avatar3.glb', 'a3')}>
+        <button
+          className={activeModel === 'a3' ? 'active' : ''}
+          onClick={() => window.loadAvatar('/models/avatar3.glb', 'a3')}
+        >
           Người đàn ông đẩy hàng
         </button>
 
-        <button onClick={() => window.loadAvatar('/models/avatar4.glb', 'a4')}>
+        <button
+          className={activeModel === 'a4' ? 'active' : ''}
+          onClick={() => window.loadAvatar('/models/avatar4.glb', 'a4')}
+        >
           Chàng trai đang nhảy
         </button>
 
@@ -325,11 +352,17 @@ function App() {
 
         <h3>Backgrounds:</h3>
 
-        <button onClick={() => window.loadEnv('/env/room1.glb')}>
+        <button
+          className={activeEnv === 'room1' ? 'active' : ''}
+          onClick={() => window.loadEnv('/env/room1.glb', 'room1')}
+        >
           Công viên
         </button>
 
-        <button onClick={() => window.loadEnv('/env/room2.glb')}>
+        <button
+          className={activeEnv === 'room2' ? 'active' : ''}
+          onClick={() => window.loadEnv('/env/room2.glb', 'room2')}
+        >
           Núi đá
         </button>
 
