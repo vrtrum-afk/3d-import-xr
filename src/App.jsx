@@ -104,109 +104,132 @@ function App() {
       if (environment) loadEnvironment('/env/room1.glb')
     }
 
-    // ================= CONTROLLER =================
-    const controller = renderer.xr.getController(0)
-    scene.add(controller)
-
+    // ================= CONTROLLERS (cả 2) =================
     const factory = new XRControllerModelFactory()
-    const grip = renderer.xr.getControllerGrip(0)
-    grip.add(factory.createControllerModel(grip))
-    scene.add(grip)
+
+    const controller0 = renderer.xr.getController(0)
+    const controller1 = renderer.xr.getController(1)
+    scene.add(controller0)
+    scene.add(controller1)
+
+    const grip0 = renderer.xr.getControllerGrip(0)
+    const grip1 = renderer.xr.getControllerGrip(1)
+    grip0.add(factory.createControllerModel(grip0))
+    grip1.add(factory.createControllerModel(grip1))
+    scene.add(grip0)
+    scene.add(grip1)
+
+    // Ray line visual để thấy hướng bắn tia
+    const rayGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -5)
+    ])
+    const rayMat = new THREE.LineBasicMaterial({ color: 0x00ffff })
+    controller0.add(new THREE.Line(rayGeo, rayMat))
+    controller1.add(new THREE.Line(rayGeo.clone(), rayMat.clone()))
 
     const raycaster = new THREE.Raycaster()
     const tempMatrix = new THREE.Matrix4()
 
-    function teleport() {
+    // ================= TELEPORT =================
+    function teleportFromController(ctrl) {
       if (!environment) return
 
-      tempMatrix.identity().extractRotation(controller.matrixWorld)
-
-      raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld)
+      tempMatrix.identity().extractRotation(ctrl.matrixWorld)
+      raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld)
       raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix)
 
-      const hit = raycaster.intersectObject(environment, true)[0]
-
-      if (hit) {
+      const hits = raycaster.intersectObject(environment, true)
+      if (hits.length > 0) {
         const cam = renderer.xr.getCamera()
-        cam.position.set(hit.point.x, hit.point.y + 1.6, hit.point.z)
+        cam.position.set(hits[0].point.x, hits[0].point.y + 1.6, hits[0].point.z)
       }
     }
 
     // ================= INPUT STATE =================
-    let moving = false
-    let lastInputTime = 0
+    // Poll button state thay vì dùng events (PICO events không reliable)
+    const prevButtons = { 0: [], 1: [] }
 
-    controller.addEventListener('selectstart', () => {
-      moving = true
-      lastInputTime = performance.now()
-      teleport()
-    })
-
-    controller.addEventListener('selectend', () => {
-      moving = false
-    })
+    function wasJustPressed(currBtns, prevBtns, index) {
+      return !!(currBtns[index]?.pressed && !prevBtns[index]?.pressed)
+    }
 
     // ================= HYBRID MOVEMENT =================
     function handleMovement(delta) {
       const cam = renderer.xr.getCamera()
       const session = renderer.xr.getSession()
+      if (!session) return
 
-      let usedGamepad = false
+      session.inputSources.forEach((source) => {
+        const gp = source.gamepad
+        if (!gp) return
 
-      if (session) {
-        session.inputSources.forEach((source) => {
-          if (source.gamepad && source.gamepad.axes.length >= 2) {
-            const axes = source.gamepad.axes
-            const forward = -axes[1]
-            const right = axes[0]
+        // Xác định index controller (left=0, right=1)
+        const idx = source.handedness === 'left' ? 0 : 1
+        const prevBtns = prevButtons[idx] || []
+        const currBtns = [...gp.buttons].map(b => ({ pressed: b.pressed, value: b.value }))
 
-            if (Math.abs(forward) > 0.1 || Math.abs(right) > 0.1) {
-              usedGamepad = true
-              lastInputTime = performance.now()
+        // ---- PICO 4 Axes Layout ----
+        // axes[0], axes[1] = touchpad (ít dùng)
+        // axes[2], axes[3] = thumbstick X/Y  <-- chính xác cho PICO 4
+        // Fallback về [0],[1] nếu axes ngắn hơn 4
+        const axes = gp.axes
+        let stickX = 0
+        let stickY = 0
 
-              const dir = new THREE.Vector3()
-              cam.getWorldDirection(dir)
-              dir.y = 0
-              dir.normalize()
-
-              const side = new THREE.Vector3()
-              side.crossVectors(dir, new THREE.Vector3(0, 1, 0))
-
-              cam.position.addScaledVector(dir, forward * 3 * delta)
-              cam.position.addScaledVector(side, right * 3 * delta)
-            }
+        if (axes.length >= 4) {
+          stickX = Math.abs(axes[2]) > 0.12 ? axes[2] : 0
+          stickY = Math.abs(axes[3]) > 0.12 ? axes[3] : 0
+          // Fallback nếu axes[2/3] đều 0
+          if (stickX === 0 && stickY === 0) {
+            stickX = Math.abs(axes[0]) > 0.12 ? axes[0] : 0
+            stickY = Math.abs(axes[1]) > 0.12 ? axes[1] : 0
           }
-        })
-      }
+        } else if (axes.length >= 2) {
+          stickX = Math.abs(axes[0]) > 0.12 ? axes[0] : 0
+          stickY = Math.abs(axes[1]) > 0.12 ? axes[1] : 0
+        }
 
-      // fallback trigger move
-      if (moving && !usedGamepad) {
-        const dir = new THREE.Vector3()
-        cam.getWorldDirection(dir)
-        dir.y = 0
-        dir.normalize()
+        // Di chuyển bằng thumbstick
+        const forward = -stickY
+        const right = stickX
 
-        cam.position.addScaledVector(dir, 2 * delta)
-      }
+        if (Math.abs(forward) > 0 || Math.abs(right) > 0) {
+          const dir = new THREE.Vector3()
+          cam.getWorldDirection(dir)
+          dir.y = 0
+          dir.normalize()
 
-      // fallback gaze auto move
-      const now = performance.now()
-      if (!usedGamepad && !moving && now - lastInputTime > 2000) {
-        const dir = new THREE.Vector3()
-        cam.getWorldDirection(dir)
-        dir.y = 0
-        dir.normalize()
+          const side = new THREE.Vector3()
+          side.crossVectors(dir, new THREE.Vector3(0, 1, 0))
 
-        cam.position.addScaledVector(dir, 0.5 * delta)
-      }
+          cam.position.addScaledVector(dir, forward * 3 * delta)
+          cam.position.addScaledVector(side, right * 3 * delta)
+        }
+
+        // ---- Teleport bằng Trigger (button index 0) ----
+        // PICO 4: button[0] = trigger, button[1] = grip/squeeze
+        if (wasJustPressed(currBtns, prevBtns, 0)) {
+          const ctrl = idx === 0 ? controller0 : controller1
+          teleportFromController(ctrl)
+        }
+
+        // Cập nhật trạng thái button frame trước
+        prevButtons[idx] = currBtns
+      })
     }
 
     // ================= XR =================
     window.enterVR = async () => {
-      const session = await navigator.xr.requestSession('immersive-vr', {
-        optionalFeatures: ['local-floor', 'bounded-floor']
-      })
-      renderer.xr.setSession(session)
+      try {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+        })
+        renderer.xr.setSession(session)
+      } catch (err) {
+        console.error('VR session error:', err)
+        alert('Không thể khởi động VR: ' + err.message)
+      }
     }
 
     // ================= LOOP =================
@@ -237,7 +260,6 @@ function App() {
     function resize() {
       const width = container.clientWidth
       const height = container.clientHeight
-
       renderer.setSize(width, height, false)
       camera.aspect = width / height
       camera.updateProjectionMatrix()
@@ -245,6 +267,11 @@ function App() {
 
     resize()
     window.addEventListener('resize', resize)
+
+    return () => {
+      window.removeEventListener('resize', resize)
+      renderer.dispose()
+    }
   }, [])
 
   return (
@@ -290,7 +317,7 @@ function App() {
 
         <hr />
 
-        <h4>Zoom x20</h4>
+        <h4>Zoom x{envScaleUI}</h4>
         <input
           type="range"
           min="5"
