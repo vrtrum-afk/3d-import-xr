@@ -5,6 +5,33 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
 
+// ================= ENV CONFIG =================
+const ENV_CONFIG = {
+  room1: {
+    envScale: 25,
+    cameraPos:    { x: 0, y: 1.6, z: 2  },
+    cameraTarget: { x: 0, y: 1.2, z: -2 },
+    modelPos:     { x: 0, y: 0,   z: -3 },
+    modelRotY:    0,
+  },
+  room2: {
+    envScale: 25,
+    cameraPos:    { x: 0, y: 1.6, z: 2  },
+    cameraTarget: { x: 0, y: 1.2, z: -2 },
+    modelPos:     { x: 0, y: 0,   z: 0  },
+    modelRotY:    0,
+  },
+  room3: {
+    envScale: 25,
+    // Camera đứng giữa phòng tròn, nhìn về hành lang
+    cameraPos:    { x: 0,  y: 1.6, z: 1  },
+    cameraTarget: { x: 0,  y: 1.2, z: -5 },
+    // Model đứng ở phía hành lang, quay mặt về camera
+    modelPos:     { x: 0,  y: 0,   z: -4 },
+    modelRotY:    Math.PI,
+  },
+}
+
 function App() {
   const mountRef = useRef(null)
   const [activeModel, setActiveModel] = useState('default')
@@ -41,19 +68,24 @@ function App() {
 
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(50, 50),
-      new THREE.MeshStandardMaterial({ color: 0x111111 })
+      new THREE.MeshStandardMaterial({ color: 0x0d0d0d })
     )
     floor.rotation.x = -Math.PI / 2
     scene.add(floor)
 
     const playerRig = new THREE.Group()
-    playerRig.position.set(0, 0, 3)
+    playerRig.position.set(0, 0, 0)
     scene.add(playerRig)
     playerRig.add(camera)
 
     let mixer = null
     let currentModel = null
     let environment = null
+    let currentEnvKey = 'room1'
+
+    // envZoom tracks the current zoom — may be overridden per-env
+    let envZoom = 25
+    let lastEnvPath = '/env/room1.glb'
 
     const loader = new GLTFLoader()
     const clock = new THREE.Clock()
@@ -70,12 +102,12 @@ function App() {
         const size = box.getSize(new THREE.Vector3())
         const center = box.getCenter(new THREE.Vector3())
 
-        model.position.set(-center.x, -box.min.y, -center.z)
+        // Normalise size then apply env config position
         model.scale.setScalar(2 / size.y)
 
-        camera.position.set(0, 1.5, 4)
-        controls.target.set(0, 1, 0)
-        controls.update()
+        const cfg = ENV_CONFIG[currentEnvKey] || ENV_CONFIG['room1']
+        model.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
+        model.rotation.y = cfg.modelRotY ?? 0
 
         if (gltf.animations.length > 0) {
           mixer = new THREE.AnimationMixer(model)
@@ -85,11 +117,17 @@ function App() {
     }
 
     // ================= ENV =================
-    let envZoom = 25
-    let lastEnvPath = '/env/room1.glb'
-
-    function loadEnvironment(path) {
+    function loadEnvironment(path, key) {
       lastEnvPath = path
+      currentEnvKey = key
+
+      const cfg = ENV_CONFIG[key] || ENV_CONFIG['room1']
+
+      // Use per-env scale if defined, otherwise keep current slider value
+      if (cfg.envScale !== undefined) {
+        envZoom = cfg.envScale
+      }
+
       loader.load(path, (gltf) => {
         if (environment) scene.remove(environment)
         environment = gltf.scene
@@ -99,32 +137,42 @@ function App() {
 
         const box = new THREE.Box3().setFromObject(environment)
         const size = box.getSize(new THREE.Vector3())
-
         const envMaxHorizontal = Math.max(size.x, size.z)
         environment.scale.setScalar((2 * envZoom) / envMaxHorizontal)
 
         environment.updateMatrixWorld(true)
         const scaledBox = new THREE.Box3().setFromObject(environment)
         const scaledCenter = scaledBox.getCenter(new THREE.Vector3())
-
         environment.position.set(-scaledCenter.x, -scaledBox.min.y, -scaledCenter.z)
         scene.add(environment)
         environment.updateMatrixWorld(true)
 
+        // Snap floor to ground
         const groundRay = new THREE.Raycaster()
         groundRay.ray.origin.set(0, 1000, 0)
         groundRay.ray.direction.set(0, -1, 0)
         const hits = groundRay.intersectObject(environment, true)
-
         if (hits.length > 0) {
-          environment.position.y += -hits[0].point.y - 0.02
+          environment.position.y += -hits[0].point.y
+        }
+
+        // Apply camera config
+        playerRig.position.set(0, 0, 0)
+        camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
+        controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
+        controls.update()
+
+        // Reposition current model to new env's position
+        if (currentModel) {
+          currentModel.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
+          currentModel.rotation.y = cfg.modelRotY ?? 0
         }
       })
     }
 
     function updateEnvScale(v) {
       envZoom = v
-      if (environment) loadEnvironment(lastEnvPath)
+      if (environment) loadEnvironment(lastEnvPath, currentEnvKey)
     }
 
     // ================= CONTROLLERS =================
@@ -279,14 +327,14 @@ function App() {
 
     // ================= INIT =================
     loadModel('/models/avatar.glb')
-    loadEnvironment('/env/room1.glb')
+    loadEnvironment('/env/room1.glb', 'room1')
 
     window.loadAvatar = (path, key) => {
       loadModel(path)
       setActiveModel(key)
     }
     window.loadEnv = (path, key) => {
-      loadEnvironment(path)
+      loadEnvironment(path, key)
       setActiveEnv(key)
     }
     window.updateEnvScale = (v) => updateEnvScale(v)
@@ -366,7 +414,7 @@ function App() {
           Núi đá
         </button>
 
-         <button
+        <button
           className={activeEnv === 'room3' ? 'active' : ''}
           onClick={() => window.loadEnv('/env/room3.glb', 'room3')}
         >
