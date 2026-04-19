@@ -366,6 +366,13 @@ function App() {
           Núi đá
         </button>
 
+         <button
+          className={activeEnv === 'room3' ? 'active' : ''}
+          onClick={() => window.loadEnv('/env/room3.glb', 'room3')}
+        >
+          Trong nhà
+        </button>
+
         <hr />
 
         <h4>Zoom x{envScaleUI}</h4>
