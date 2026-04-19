@@ -43,7 +43,7 @@ const ENV_CONFIG = {
     // Dịch env về phía âm X để phòng tròn lớn (bên trái trong layout)
     // trở thành trung tâm của scene
     centerOffset: { x: -8, z: 0 },
-    cameraPos:    { x: 0, y: 1.6, z:  15 },  // gần nhất: x: 0, y: 1.6, z:  5 
+    cameraPos:    { x: 0, y: 1.6, z:  -10 },  // gần nhất: x: 0, y: 1.6, z:  15 
     cameraTarget: { x: -20, y: 1.4, z: -3 },  // gần nhất:  x: -15, y: 1.4, z: -3
     modelPos:     { x: 0, y: 0,   z: -10 },  // đứng giữa hành lang
     modelRotY:    0                          // quay mặt về z+ (về phía camera)        
