@@ -43,10 +43,10 @@ const ENV_CONFIG = {
     // Dịch env về phía âm X để phòng tròn lớn (bên trái trong layout)
     // trở thành trung tâm của scene
     centerOffset: { x: -8, z: 0 },
-    cameraPos:    { x: -2,  y: 1.6, z: 0 },   // lùi vào trong phòng tròn (x âm)
-    cameraTarget: { x:  4,  y: 1.4, z: 0 },   // nhìn về hành lang
-    modelPos:     { x:  4,  y: 0,   z: 0 },   // giữa hành lang
-    modelRotY:    Math.PI,                      // quay mặt về camera
+    cameraPos:    { x: 0, y: 1.6, z:  2 },  // trong phòng tròn lớn, lùi về z+
+    cameraTarget: { x: 0, y: 1.4, z: -3 },  // nhìn vào hành lang (z âm)
+    modelPos:     { x: 0, y: 0,   z: -3 },  // đứng giữa hành lang
+    modelRotY:    0                          // quay mặt về z+ (về phía camera)        
   },
 }
 
