@@ -6,37 +6,55 @@ import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerM
 import './App.css'
 
 // ================= ENV CONFIG =================
+// envScale    : zoom môi trường
+// centerOffset: dịch chuyển env sau khi căn bounding box — dùng để bù lệch
+//               khi "phần phòng thực tế" không nằm ở tâm bounding box
+//               (ví dụ room3 có nền trắng rộng bên ngoài làm lệch tâm)
+// cameraPos   : vị trí mắt camera (world space, sau khi env đã được đặt)
+// cameraTarget: điểm camera nhìn vào
+// modelPos    : vị trí đặt chân model
+// modelRotY   : hướng xoay model (radian)
+
 const ENV_CONFIG = {
   room1: {
-    envScale: 25,
-    cameraPos:    { x: 0, y: 1.6, z: 2  },
-    cameraTarget: { x: 0, y: 1.2, z: -2 },
-    modelPos:     { x: 0, y: 0,   z: -3 },
+    envScale:     25,
+    centerOffset: { x: 0, z: 0 },
+    cameraPos:    { x: 0,   y: 1.6, z:  2  },
+    cameraTarget: { x: 0,   y: 1.2, z: -2  },
+    modelPos:     { x: 0,   y: 0,   z: -3  },
     modelRotY:    0,
   },
   room2: {
-    envScale: 25,
-    cameraPos:    { x: 0, y: 1.6, z: 2  },
-    cameraTarget: { x: 0, y: 1.2, z: -2 },
-    modelPos:     { x: 0, y: 0,   z: 0  },
+    envScale:     25,
+    centerOffset: { x: 0, z: 0 },
+    cameraPos:    { x: 0,   y: 1.6, z:  2  },
+    cameraTarget: { x: 0,   y: 1.2, z: -2  },
+    modelPos:     { x: 0,   y: 0,   z:  0  },
     modelRotY:    0,
   },
+  // room3: phòng triển lãm hình guitar
+  // Bounding box của toàn bộ file bao gồm cả nền trắng rộng bên ngoài,
+  // nên tâm bounding box KHÔNG phải tâm căn phòng.
+  // → dùng centerOffset để dịch env sao cho phòng tròn lớn nằm quanh origin.
+  // Cách tune: nếu camera vẫn nhìn ra ngoài, tăng/giảm centerOffset.x hoặc .z
+  // cho đến khi tường phòng bao quanh camera từ mọi phía.
   room3: {
-    envScale: 25,
-    // Camera đứng giữa phòng tròn, nhìn về hành lang
-    cameraPos:    { x: 0,  y: 1.6, z: 1  },
-    cameraTarget: { x: 0,  y: 1.2, z: -5 },
-    // Model đứng ở phía hành lang, quay mặt về camera
-    modelPos:     { x: 0,  y: 0,   z: -4 },
-    modelRotY:    Math.PI,
+    envScale:     45,
+    // Dịch env về phía âm X để phòng tròn lớn (bên trái trong layout)
+    // trở thành trung tâm của scene
+    centerOffset: { x: -8, z: 0 },
+    cameraPos:    { x: 0,  y: 1.6, z:  0  },  // giữa phòng tròn lớn
+    cameraTarget: { x: 6,  y: 1.4, z:  0  },  // nhìn về hành lang
+    modelPos:     { x: 5,  y: 0,   z:  0  },  // đứng ở đầu hành lang
+    modelRotY:    Math.PI,                     // quay mặt về phía camera
   },
 }
 
 function App() {
   const mountRef = useRef(null)
   const [activeModel, setActiveModel] = useState('default')
-  const [activeEnv, setActiveEnv] = useState('room1')
-  const [envScaleUI, setEnvScaleUI] = useState(25)
+  const [activeEnv, setActiveEnv]     = useState('room1')
+  const [envScaleUI, setEnvScaleUI]   = useState(25)
 
   useEffect(() => {
     const scene = new THREE.Scene()
@@ -52,10 +70,9 @@ function App() {
     const container = mountRef.current
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
-
     renderer.domElement.style.display = 'block'
-    renderer.domElement.style.width = '100%'
-    renderer.domElement.style.height = '100%'
+    renderer.domElement.style.width   = '100%'
+    renderer.domElement.style.height  = '100%'
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -78,31 +95,26 @@ function App() {
     scene.add(playerRig)
     playerRig.add(camera)
 
-    let mixer = null
-    let currentModel = null
-    let environment = null
+    let mixer         = null
+    let currentModel  = null
+    let environment   = null
     let currentEnvKey = 'room1'
-
-    // envZoom tracks the current zoom — may be overridden per-env
-    let envZoom = 25
-    let lastEnvPath = '/env/room1.glb'
+    let envZoom       = 25
+    let lastEnvPath   = '/env/room1.glb'
 
     const loader = new GLTFLoader()
-    const clock = new THREE.Clock()
+    const clock  = new THREE.Clock()
 
     // ================= MODEL =================
     function loadModel(path) {
       loader.load(path, (gltf) => {
         if (currentModel) scene.remove(currentModel)
-        const model = gltf.scene
+        const model  = gltf.scene
         currentModel = model
         scene.add(model)
 
-        const box = new THREE.Box3().setFromObject(model)
+        const box  = new THREE.Box3().setFromObject(model)
         const size = box.getSize(new THREE.Vector3())
-        const center = box.getCenter(new THREE.Vector3())
-
-        // Normalise size then apply env config position
         model.scale.setScalar(2 / size.y)
 
         const cfg = ENV_CONFIG[currentEnvKey] || ENV_CONFIG['room1']
@@ -117,56 +129,62 @@ function App() {
     }
 
     // ================= ENV =================
+    function applyEnvConfig(cfg) {
+      playerRig.position.set(0, 0, 0)
+      camera.position.set(cfg.cameraPos.x,    cfg.cameraPos.y,    cfg.cameraPos.z)
+      controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
+      controls.update()
+
+      if (currentModel) {
+        currentModel.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
+        currentModel.rotation.y = cfg.modelRotY ?? 0
+      }
+    }
+
     function loadEnvironment(path, key) {
-      lastEnvPath = path
+      lastEnvPath   = path
       currentEnvKey = key
 
       const cfg = ENV_CONFIG[key] || ENV_CONFIG['room1']
-
-      // Use per-env scale if defined, otherwise keep current slider value
-      if (cfg.envScale !== undefined) {
-        envZoom = cfg.envScale
-      }
+      if (cfg.envScale !== undefined) envZoom = cfg.envScale
 
       loader.load(path, (gltf) => {
         if (environment) scene.remove(environment)
         environment = gltf.scene
 
         floor.visible = false
-        grid.visible = false
+        grid.visible  = false
 
-        const box = new THREE.Box3().setFromObject(environment)
+        // 1. Scale env
+        const box  = new THREE.Box3().setFromObject(environment)
         const size = box.getSize(new THREE.Vector3())
         const envMaxHorizontal = Math.max(size.x, size.z)
         environment.scale.setScalar((2 * envZoom) / envMaxHorizontal)
 
+        // 2. Căn giữa bounding box về origin
         environment.updateMatrixWorld(true)
-        const scaledBox = new THREE.Box3().setFromObject(environment)
+        const scaledBox    = new THREE.Box3().setFromObject(environment)
         const scaledCenter = scaledBox.getCenter(new THREE.Vector3())
-        environment.position.set(-scaledCenter.x, -scaledBox.min.y, -scaledCenter.z)
+        environment.position.set(
+          -scaledCenter.x + (cfg.centerOffset?.x ?? 0),
+          -scaledBox.min.y,
+          -scaledCenter.z + (cfg.centerOffset?.z ?? 0)
+        )
         scene.add(environment)
         environment.updateMatrixWorld(true)
 
-        // Snap floor to ground
-        const groundRay = new THREE.Raycaster()
-        groundRay.ray.origin.set(0, 1000, 0)
+        // 3. Raycast tìm sàn thực tế tại vị trí camera sẽ đứng
+        const rayOriginX = cfg.cameraPos.x
+        const rayOriginZ = cfg.cameraPos.z
+        const groundRay  = new THREE.Raycaster()
+        groundRay.ray.origin.set(rayOriginX, 1000, rayOriginZ)
         groundRay.ray.direction.set(0, -1, 0)
         const hits = groundRay.intersectObject(environment, true)
         if (hits.length > 0) {
           environment.position.y += -hits[0].point.y
         }
 
-        // Apply camera config
-        playerRig.position.set(0, 0, 0)
-        camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
-        controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
-        controls.update()
-
-        // Reposition current model to new env's position
-        if (currentModel) {
-          currentModel.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
-          currentModel.rotation.y = cfg.modelRotY ?? 0
-        }
+        applyEnvConfig(cfg)
       })
     }
 
@@ -191,14 +209,14 @@ function App() {
     playerRig.add(grip1)
 
     const rayGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0,  0),
       new THREE.Vector3(0, 0, -8)
     ])
     const rayMat = new THREE.LineBasicMaterial({ color: 0x00ffff })
-    controller0.add(new THREE.Line(rayGeo, rayMat))
+    controller0.add(new THREE.Line(rayGeo,         rayMat))
     controller1.add(new THREE.Line(rayGeo.clone(), rayMat.clone()))
 
-    const raycaster = new THREE.Raycaster()
+    const raycaster  = new THREE.Raycaster()
     const tempMatrix = new THREE.Matrix4()
 
     // ================= TELEPORT =================
@@ -212,15 +230,13 @@ function App() {
       const hits = raycaster.intersectObjects(targets, true)
 
       if (hits.length > 0) {
-        const hit = hits[0].point
-        const xrCam = renderer.xr.getCamera()
+        const hit       = hits[0].point
+        const xrCam     = renderer.xr.getCamera()
         const headWorld = new THREE.Vector3()
         headWorld.setFromMatrixPosition(xrCam.matrixWorld)
-        const headOffsetX = headWorld.x - playerRig.position.x
-        const headOffsetZ = headWorld.z - playerRig.position.z
 
-        playerRig.position.x = hit.x - headOffsetX
-        playerRig.position.z = hit.z - headOffsetZ
+        playerRig.position.x = hit.x - (headWorld.x - playerRig.position.x)
+        playerRig.position.z = hit.z - (headWorld.z - playerRig.position.z)
       }
     }
 
@@ -242,13 +258,12 @@ function App() {
         const gp = source.gamepad
         if (!gp) return
 
-        const idx = source.handedness === 'left' ? 0 : 1
+        const idx  = source.handedness === 'left' ? 0 : 1
         const prev = prevButtonState[idx] || []
         const curr = Array.from(gp.buttons).map(b => ({ pressed: b.pressed, value: b.value }))
 
         const axes = gp.axes
-        let stickX = 0
-        let stickY = 0
+        let stickX = 0, stickY = 0
         const DEAD = 0.15
 
         if (axes.length >= 4) {
@@ -270,13 +285,12 @@ function App() {
           rightDir.crossVectors(lookDir, new THREE.Vector3(0, 1, 0)).normalize()
 
           const speed = 3 * delta
-          playerRig.position.addScaledVector(lookDir, -stickY * speed)
-          playerRig.position.addScaledVector(rightDir, stickX * speed)
+          playerRig.position.addScaledVector(lookDir,  -stickY * speed)
+          playerRig.position.addScaledVector(rightDir,  stickX * speed)
         }
 
         if (wasJustPressed(curr, prev, 0)) {
-          const ctrl = idx === 0 ? controller0 : controller1
-          teleportFromController(ctrl)
+          teleportFromController(idx === 0 ? controller0 : controller1)
         }
 
         prevButtonState[idx] = curr
@@ -427,7 +441,7 @@ function App() {
         <input
           type="range"
           min="5"
-          max="50"
+          max="100"
           value={envScaleUI}
           onChange={(e) => {
             const v = parseFloat(e.target.value)
