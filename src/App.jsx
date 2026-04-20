@@ -4,7 +4,6 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
-
 // ================= ENV CONFIG =================
 // envScale    : zoom môi trường
 // centerOffset: dịch chuyển env sau khi căn bounding box — dùng để bù lệch
@@ -34,11 +33,11 @@ const ENV_CONFIG = {
   },
   room1: {
     envScale:     45,
-    centerOffset: { x: -15, z: 0 }, // khoảng cách camera với model
-    cameraPos:    { x: -13, y: -2.5, z:  0 },  // vị trí của camrera
-    cameraTarget: { x: -25, y: -5, z: 0 }, // hướng của camrera
-    modelPos:     { x: -35, y: -6, z: 0 }, // vị trí của model
-    modelRotY:    14.2                         // model quay mặt về phía camera       
+    centerOffset: { x: -15, z: 0 },
+    cameraPos:    { x: -13, y: -2.5, z:  0 },
+    cameraTarget: { x: -25, y: -5,   z:  0 },
+    modelPos:     { x: -35, y: -6,   z:  0 },
+    modelRotY:    14.2,
   },
 }
 
@@ -91,8 +90,11 @@ function App() {
     let currentModel  = null
     let environment   = null
     let currentEnvKey = 'room1'
-    let envZoom       = 25
+    let envZoom       = 45
     let lastEnvPath   = '/env/room1.glb'
+
+    // Lưu cfg hiện tại để dùng khi enter VR
+    let activeCfg = ENV_CONFIG['room1']
 
     const loader = new GLTFLoader()
     const clock  = new THREE.Clock()
@@ -122,8 +124,11 @@ function App() {
 
     // ================= ENV =================
     function applyEnvConfig(cfg) {
+      activeCfg = cfg
+
+      // Reset playerRig, đặt camera đúng vị trí web
       playerRig.position.set(0, 0, 0)
-      camera.position.set(cfg.cameraPos.x,    cfg.cameraPos.y,    cfg.cameraPos.z)
+      camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
       controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
       controls.update()
 
@@ -147,13 +152,11 @@ function App() {
         floor.visible = false
         grid.visible  = false
 
-        // 1. Scale env
         const box  = new THREE.Box3().setFromObject(environment)
         const size = box.getSize(new THREE.Vector3())
         const envMaxHorizontal = Math.max(size.x, size.z)
         environment.scale.setScalar((2 * envZoom) / envMaxHorizontal)
 
-        // 2. Căn giữa bounding box về origin
         environment.updateMatrixWorld(true)
         const scaledBox    = new THREE.Box3().setFromObject(environment)
         const scaledCenter = scaledBox.getCenter(new THREE.Vector3())
@@ -165,7 +168,6 @@ function App() {
         scene.add(environment)
         environment.updateMatrixWorld(true)
 
-        // 3. Raycast tìm sàn thực tế tại vị trí camera sẽ đứng
         const rayOriginX = cfg.cameraPos.x
         const rayOriginZ = cfg.cameraPos.z
         const groundRay  = new THREE.Raycaster()
@@ -184,6 +186,40 @@ function App() {
       envZoom = v
       if (environment) loadEnvironment(lastEnvPath, currentEnvKey)
     }
+
+    // ================= ALIGN PLAYERRIG KHI VÀO VR =================
+    // Khi WebXR bắt đầu, XR camera có vị trí riêng dựa trên headset tracking.
+    // Ta dịch chuyển playerRig để XR camera khớp với vị trí camera web.
+    renderer.xr.addEventListener('sessionstart', () => {
+      // Cần đợi 1 frame để XR camera có matrixWorld chính xác
+      setTimeout(() => {
+        const cfg    = activeCfg
+        const xrCam  = renderer.xr.getCamera()
+        xrCam.updateMatrixWorld(true)
+
+        const xrWorldPos = new THREE.Vector3()
+        xrWorldPos.setFromMatrixPosition(xrCam.matrixWorld)
+
+        // Vị trí camera mong muốn trong world space
+        const desiredX = cfg.cameraPos.x
+        const desiredY = cfg.cameraPos.y
+        const desiredZ = cfg.cameraPos.z
+
+        // Dịch playerRig để bù đắp sự lệch giữa XR camera và vị trí mong muốn
+        playerRig.position.x += desiredX - xrWorldPos.x
+        playerRig.position.y += desiredY - xrWorldPos.y
+        playerRig.position.z += desiredZ - xrWorldPos.z
+      }, 100)
+    })
+
+    // Reset playerRig khi thoát VR
+    renderer.xr.addEventListener('sessionend', () => {
+      playerRig.position.set(0, 0, 0)
+      const cfg = activeCfg
+      camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
+      controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
+      controls.update()
+    })
 
     // ================= CONTROLLERS =================
     const factory = new XRControllerModelFactory()
