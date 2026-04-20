@@ -17,7 +17,7 @@ import './App.css'
 
 const ENV_CONFIG = {
   room3: {
-    envScale:     45,
+    envScale:     35,
     centerOffset: { x: 0, z: 0 },
     cameraPos:    { x: 0,   y: 1.6, z:  2  },
     cameraTarget: { x: 0,   y: 1.2, z: -2  },
@@ -33,7 +33,7 @@ const ENV_CONFIG = {
     modelRotY:    0,
   },
   room1: {
-    envScale:     45,
+    envScale:     35,
     centerOffset: { x: -15, z: 0 }, // khoảng cách camera với model
     cameraPos:    { x: -13, y: -2.5, z:  0 },  // vị trí của camrera
     cameraTarget: { x: -25, y: -5, z: 0 }, // hướng của camrera
