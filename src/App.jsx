@@ -16,7 +16,7 @@ import './App.css'
 // modelRotY   : hướng xoay model (radian)
 
 const ENV_CONFIG = {
-  room1: {
+  room3: {
     envScale:     45,
     centerOffset: { x: 0, z: 0 },
     cameraPos:    { x: 0,   y: 1.6, z:  2  },
@@ -32,17 +32,11 @@ const ENV_CONFIG = {
     modelPos:     { x: 0,   y: 0,   z:  0  },
     modelRotY:    0,
   },
-  // room3: phòng triển lãm hình guitar
-  // Bounding box của toàn bộ file bao gồm cả nền trắng rộng bên ngoài,
-  // nên tâm bounding box KHÔNG phải tâm căn phòng.
-  // → dùng centerOffset để dịch env sao cho phòng tròn lớn nằm quanh origin.
-  // Cách tune: nếu camera vẫn nhìn ra ngoài, tăng/giảm centerOffset.x hoặc .z
-  // cho đến khi tường phòng bao quanh camera từ mọi phía.
-  room3: {
+  room1: {
     envScale:     45,
     // Dịch env về phía âm X để phòng tròn lớn (bên trái trong layout)
     // trở thành trung tâm của scene
-    centerOffset: { x: -8, z: 0 },
+    centerOffset: { x: -10, z: 0 },
     cameraPos:    { x: -15, y: 1.6, z:  0 },  // gần nhất: x: 15, y: 1.6, z:  5 
     cameraTarget: { x: -25, y: 1.4, z: 0 },  // gần nhất:  x: -25, y: 1.4, z: -3
     modelPos:     { x: -35, y: 0, z: 0 },  // x: -10, y: 0, z: 0
@@ -54,7 +48,7 @@ function App() {
   const mountRef = useRef(null)
   const [activeModel, setActiveModel] = useState('default')
   const [activeEnv, setActiveEnv]     = useState('room1')
-  const [envScaleUI, setEnvScaleUI]   = useState(25)
+  const [envScaleUI, setEnvScaleUI]   = useState(45)
 
   useEffect(() => {
     const scene = new THREE.Scene()
@@ -400,7 +394,7 @@ function App() {
           className={activeModel === 'a3' ? 'active' : ''}
           onClick={() => window.loadAvatar('/models/avatar3.glb', 'a3')}
         >
-          Người đàn ông đẩy hàng
+          Bé gái đứng 1 mình
         </button>
 
         <button
@@ -418,7 +412,7 @@ function App() {
           className={activeEnv === 'room1' ? 'active' : ''}
           onClick={() => window.loadEnv('/env/room1.glb', 'room1')}
         >
-          Công viên
+          Trong nhà
         </button>
 
         <button
@@ -432,7 +426,7 @@ function App() {
           className={activeEnv === 'room3' ? 'active' : ''}
           onClick={() => window.loadEnv('/env/room3.glb', 'room3')}
         >
-          Trong nhà
+          Công viên
         </button>
 
         <hr />
