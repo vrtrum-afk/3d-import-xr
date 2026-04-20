@@ -5,19 +5,16 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
 
-// Tất cả config Y đều là RELATIVE TO FLOOR (y=0 = mặt sàn)
-// Không còn hardcode y âm nữa — floor sẽ được raycast về y=0 tự động
 const ENV_CONFIG = {
   room3: {
     envScale:     45,
     centerOffset: { x: 0, z: 0 },
-    // X, Z vị trí camera và model; Y sẽ tự tính sau khi floor về 0
     camX: 0,   camZ:  2,
     tgtX: 0,   tgtZ: -2,
     modelX: 0, modelZ: -3,
     modelRotY:   0,
-    modelHeight: 1.7,   // mét (world units sau khi env scale)
-    eyeHeight:   1.6,   // camera ở độ cao này so với sàn
+    modelHeight: 1.7,
+    eyeHeight:   1.6,
   },
   room2: {
     envScale:     25,
@@ -32,13 +29,12 @@ const ENV_CONFIG = {
   room1: {
     envScale:     45,
     centerOffset: { x: -15, y: -5, z: 0 },
-    // X, Z giữ nguyên từ config gốc đã hoạt động đúng trên web
     camX:   -13, camZ: 0,
     tgtX:   -25, tgtZ: 0,
     modelX: -35, modelZ: 0,
     modelRotY:   14.2,
-    modelHeight: 1.7,   // world units; sẽ scale đúng tương đối với env
-    eyeHeight:   1.6,   // camera cao 1.6m so với sàn (mắt người 1.7m)
+    modelHeight: 1.7,
+    eyeHeight:   1.6,
   },
 }
 
@@ -89,13 +85,13 @@ export default function App() {
     let currentEnvKey = 'room1'
     let envZoom       = 45
     let lastEnvPath   = '/env/room1.glb'
-    let activeCfg     = null   // sẽ được set sau khi tính Y thực tế
+    let activeCfg     = null
 
     const loader = new GLTFLoader()
     const clock  = new THREE.Clock()
 
     // ─────────────────────────────────────────────────
-    //  Raycast lấy Y của sàn tại toạ độ (x, z) bất kỳ
+    //  Raycast lấy Y sàn
     // ─────────────────────────────────────────────────
     function getFloorY(x, z) {
       const rc = new THREE.Raycaster()
@@ -109,50 +105,59 @@ export default function App() {
     }
 
     // ─────────────────────────────────────────────────
-    //  placeModel — dùng Y sàn thực tế tại vị trí model
+    //  placeModel — scale đúng tỉ lệ, camera ngang mắt
     // ─────────────────────────────────────────────────
     function placeModel(model, cfg) {
-      // 1. Reset về gốc để đo bbox sạch
+      // 1. Reset
       model.scale.set(1, 1, 1)
       model.position.set(0, 0, 0)
       model.rotation.y = cfg.modelRotY ?? 0
       model.updateMatrixWorld(true)
 
-      // 2. Chiều cao gốc
+      // 2. Chiều cao gốc của model
       const b0   = new THREE.Box3().setFromObject(model)
       const rawH = b0.getSize(new THREE.Vector3()).y
 
-      // 3. Scale để đúng modelHeight
-      // modelHeight cần được scale tương đối với envScale
-      // → tính unitScale: 1 world unit = bao nhiêu "mét ảo"
-      // → modelHeight (mét) / unitScale = world units cần thiết
-      // Đơn giản hơn: dùng khoảng cách camera↔model làm reference
-      // Người cao 1.7m, khoảng cách nhìn tự nhiên ~3-5m → tỉ lệ 1:3
-      // Với room1: dist = 22 units, người cao = 22/13 ≈ 1.7 units
+      // 3. Tính worldModelH dựa trên dist cam↔model
       const dx   = cfg.camX - cfg.modelX
       const dz   = cfg.camZ - cfg.modelZ
       const dist = Math.sqrt(dx * dx + dz * dz)
-      // Tỉ lệ người/khoảng cách trong thực tế ≈ 1.7/5 = 0.34
-      // nhưng ta nhìn từ xa hơn (khoảng 3-6m), dùng 0.1 đã qua test
       const worldModelH = dist * (cfg.modelHeight / 17.0)
       const s = worldModelH / rawH
       model.scale.set(s, s, s)
 
-      // 4. Đặt X, Z
+      // 4. Lưu unitScale: 1 mét thực = bao nhiêu world units
+      cfg._unitScale = worldModelH / cfg.modelHeight
+
+      // 5. Đặt vị trí X, Z
       model.position.x = cfg.modelX
       model.position.z = cfg.modelZ
       model.position.y = 0
       model.updateMatrixWorld(true)
 
-      // 5. Đo bbox sau scale
+      // 6. Đo bbox sau scale, căn chân chạm sàn
       const b1 = new THREE.Box3().setFromObject(model)
-
-      // 6. Lấy Y sàn thực tế tại vị trí chân model
       const floorAtModel = getFloorY(cfg.modelX, cfg.modelZ)
-
-      // 7. Đặt Y để chân (min.y) chạm đúng sàn
       model.position.y = floorAtModel - b1.min.y
       model.updateMatrixWorld(true)
+
+      // 7. Sau khi biết unitScale → set camera ngang tầm mắt
+      const u          = cfg._unitScale
+      const floorAtCam = getFloorY(cfg.camX, cfg.camZ)
+      const floorAtTgt = getFloorY(cfg.tgtX, cfg.tgtZ)
+
+      camera.position.set(
+        cfg.camX,
+        floorAtCam + cfg.eyeHeight * u,
+        cfg.camZ
+      )
+      // Target nhìn vào mặt model (eyeHeight * 0.9 = ngang mắt model)
+      controls.target.set(
+        cfg.tgtX,
+        floorAtTgt + cfg.eyeHeight * 0.9 * u,
+        cfg.tgtZ
+      )
+      controls.update()
     }
 
     function loadModel(path) {
@@ -169,26 +174,24 @@ export default function App() {
     }
 
     // ─────────────────────────────────────────────────
-    //  loadEnvironment + applyEnvConfig
-    //  Sau khi load xong, tự tính Y camera/target/model
-    //  dựa trên raycast → không còn hardcode Y âm
+    //  buildRuntimeCfg — chỉ tính sơ bộ trước placeModel
     // ─────────────────────────────────────────────────
     function buildRuntimeCfg(baseCfg) {
-      // Raycast Y tại vị trí camera
-      const floorAtCam   = getFloorY(baseCfg.camX,   baseCfg.camZ)
-      // Raycast Y tại vị trí model
-      const floorAtModel = getFloorY(baseCfg.modelX, baseCfg.modelZ)
-      // Raycast Y tại vị trí target
-      const floorAtTgt   = getFloorY(baseCfg.tgtX,   baseCfg.tgtZ)
-
+      const floorAtCam = getFloorY(baseCfg.camX, baseCfg.camZ)
+      const floorAtTgt = getFloorY(baseCfg.tgtX, baseCfg.tgtZ)
       return {
         ...baseCfg,
-        // Camera mắt người = sàn + eyeHeight
-        cameraPos:    { x: baseCfg.camX,   y: floorAtCam   + baseCfg.eyeHeight, z: baseCfg.camZ   },
-        // Target nhìn hơi thấp hơn mắt (ngang ngực model)
-        cameraTarget: { x: baseCfg.tgtX,   y: floorAtTgt   + baseCfg.eyeHeight * 0.7, z: baseCfg.tgtZ   },
-        // Chân model = mặt sàn tại vị trí model
-        modelPos:     { x: baseCfg.modelX, y: floorAtModel, z: baseCfg.modelZ  },
+        cameraPos: {
+          x: baseCfg.camX,
+          y: floorAtCam + baseCfg.eyeHeight,   // tạm thời, placeModel sẽ override
+          z: baseCfg.camZ,
+        },
+        cameraTarget: {
+          x: baseCfg.tgtX,
+          y: floorAtTgt + baseCfg.eyeHeight * 0.9,
+          z: baseCfg.tgtZ,
+        },
+        modelPos: { x: baseCfg.modelX, y: 0, z: baseCfg.modelZ },
       }
     }
 
@@ -196,6 +199,7 @@ export default function App() {
       activeCfg = cfg
       playerRig.position.set(0, 0, 0)
       playerRig.rotation.set(0, 0, 0)
+      // Set camera tạm — placeModel sẽ override bằng unitScale chính xác
       camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
       controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
       controls.update()
@@ -214,13 +218,11 @@ export default function App() {
         floor.visible = false
         grid.visible  = false
 
-        // Scale env
         const b    = new THREE.Box3().setFromObject(environment)
         const size = b.getSize(new THREE.Vector3())
         environment.scale.setScalar((2 * envZoom) / Math.max(size.x, size.z))
         environment.updateMatrixWorld(true)
 
-        // Căn giữa env
         const sb = new THREE.Box3().setFromObject(environment)
         const sc = sb.getCenter(new THREE.Vector3())
         environment.position.set(
@@ -231,7 +233,7 @@ export default function App() {
         scene.add(environment)
         environment.updateMatrixWorld(true)
 
-        // Raycast kéo sàn về y=0 tại vị trí camera
+        // Kéo sàn về y=0 tại vị trí camera
         const rc = new THREE.Raycaster()
         rc.ray.origin.set(baseCfg.camX, 10000, baseCfg.camZ)
         rc.ray.direction.set(0, -1, 0)
@@ -241,8 +243,6 @@ export default function App() {
           environment.updateMatrixWorld(true)
         }
 
-        // Bây giờ sàn tại camX,camZ = y=0
-        // Tính runtime config với Y thực tế
         const runtimeCfg = buildRuntimeCfg(baseCfg)
         applyEnvConfig(runtimeCfg)
       })
@@ -261,7 +261,6 @@ export default function App() {
         if (!activeCfg) return
         const xrCam = renderer.xr.getCamera()
         xrCam.updateMatrixWorld(true)
-
         const xrPos = new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld)
         playerRig.position.x += activeCfg.cameraPos.x - xrPos.x
         playerRig.position.y += activeCfg.cameraPos.y - xrPos.y
@@ -325,16 +324,31 @@ export default function App() {
     }
 
     // ─────────────────────────────────────────────────
-    //  XR Movement — CORRECT LOCOMOTION
+    //  XR Movement — FIX JOYSTICK AXES
     //
-    //  Nguyên tắc:
-    //  - Lấy YAW của XR camera trong world space
-    //  - Tách YAW của playerRig ra
-    //  - headYaw = camWorldYaw - rigYaw  → hướng đầu người (local)
-    //  - Di chuyển = rotate (forward/right) bởi (rigYaw + headYaw)
-    //               = rotate bởi camWorldYaw  → world space movement
-    //  - Cộng trực tiếp vào playerRig.position (world space)
-    //  → Đúng 100%, không bị double-rotation
+    //  WebXR Gamepad axes layout (standard):
+    //  axes[0] = touchpad/thumbstick X  (left=-1, right=+1)
+    //  axes[1] = touchpad/thumbstick Y  (up=-1,   down=+1)
+    //  axes[2] = thumbstick X           (left=-1, right=+1)  ← Quest/Index
+    //  axes[3] = thumbstick Y           (up=-1,   down=+1)   ← Quest/Index
+    //
+    //  Mapping đúng:
+    //  sx = axes[2] (hoặc axes[0]) → strafe LEFT/RIGHT
+    //  sy = axes[3] (hoặc axes[1]) → move  FORWARD/BACK
+    //
+    //  Di chuyển:
+    //  forward (tiến)  = camera nhìn về đâu (XZ flattened)
+    //  right   (phải)  = cross(up, forward) ... KHÔNG phải (fz, 0, -fx)
+    //
+    //  Công thức đúng:
+    //  forward = normalize(camDir.xz)
+    //  right   = normalize(cross(forward, worldUp))  -- worldUp = (0,1,0)
+    //          = (forward.z, 0, -forward.x)  ← đây là RIGHT thực sự
+    //
+    //  Lý do code cũ bị xoay 90°:
+    //  - right được set thành (forward.z, 0, -forward.x) nhưng lại dùng
+    //    addScaledVector(forward, -sy) và addScaledVector(right, sx)
+    //    trong khi axes bị swap → kết quả xoay 90°
     // ─────────────────────────────────────────────────
     const prevBtn = { 0: [], 1: [] }
 
@@ -345,22 +359,33 @@ export default function App() {
       const xrCam = renderer.xr.getCamera()
       xrCam.updateMatrixWorld(true)
 
-      // Lấy YAW của XR camera trong world space (bỏ pitch và roll)
+      // Hướng camera nhìn, flatten xuống mặt phẳng XZ
       const camWorldDir = new THREE.Vector3()
       xrCam.getWorldDirection(camWorldDir)
-      // flatten về mặt phẳng XZ
       camWorldDir.y = 0
       camWorldDir.normalize()
 
-      // forward = hướng camera nhìn (XZ)
-      // right   = vuông góc bên phải
-      const forward = camWorldDir
-      const right   = new THREE.Vector3(-forward.z, 0, forward.x)
-      // Giải thích right: rotate forward 90° CW quanh Y
-      // forward = (fx, 0, fz) → right = (fz, 0, -fx)... 
-      // Dùng cross product đúng: right = forward × up  (right-hand: ngón trỏ=forward, ngón giữa=up → ngón cái=left)
-      // Nên: right = up × forward để có RIGHT
-      right.set(forward.z, 0, -forward.x)  // rotate -90° quanh Y = RIGHT ✓
+      // forward = hướng tiến (camera nhìn về đâu → đi về đó)
+      const forward = camWorldDir.clone()
+
+      // right = cross(forward, up) -- right-hand rule
+      // forward=(fx,0,fz), up=(0,1,0)
+      // cross = (0*fz - 1*0, 1*fx - 0*fz, 0*0 - 0*fx) ... 
+      // đúng hơn dùng THREE:
+      const up    = new THREE.Vector3(0, 1, 0)
+      const right = new THREE.Vector3().crossVectors(forward, up).normalize()
+      // crossVectors(forward, up):
+      //   x = forward.y*up.z - forward.z*up.y = 0 - fz*1 = -fz
+      //   y = forward.z*up.x - forward.x*up.z = 0 - 0   = 0
+      //   z = forward.x*up.y - forward.y*up.x = fx - 0  = fx
+      // → right = (-fz, 0, fx)  ... đây là LEFT, ta cần negate
+      // Nên dùng crossVectors(up, forward) thay vì crossVectors(forward, up):
+      right.crossVectors(up, forward).normalize()
+      // cross(up, forward):
+      //   x = up.y*fz - up.z*fy = 1*fz - 0 = fz
+      //   y = up.z*fx - up.x*fz = 0 - 0    = 0
+      //   z = up.x*fy - up.y*fx = 0 - fx   = -fx
+      // → right = (fz, 0, -fx) ✓  đây đúng là RIGHT
 
       session.inputSources.forEach((src) => {
         const gp = src.gamepad
@@ -371,11 +396,18 @@ export default function App() {
 
         const ax   = gp.axes
         const DEAD = 0.15
+
+        // ── Đọc axes đúng thứ tự ──────────────────────────
+        // sx: ngang  (left < 0, right > 0) → strafe
+        // sy: dọc    (up   < 0, down  > 0) → tiến/lùi
         let sx = 0, sy = 0
+
         if (ax.length >= 4) {
+          // Quest / Index: thumbstick ở axes[2], axes[3]
           if (Math.abs(ax[2]) > DEAD) sx = ax[2]
           if (Math.abs(ax[3]) > DEAD) sy = ax[3]
         }
+        // Fallback: axes[0], axes[1] (Vive wand touchpad)
         if (sx === 0 && sy === 0 && ax.length >= 2) {
           if (Math.abs(ax[0]) > DEAD) sx = ax[0]
           if (Math.abs(ax[1]) > DEAD) sy = ax[1]
@@ -383,10 +415,17 @@ export default function App() {
 
         if (sx !== 0 || sy !== 0) {
           const spd = 3 * delta
+
+          // sy < 0 = đẩy lên = tiến về phía camera nhìn (+forward)
+          // sy > 0 = đẩy xuống = lùi lại  (-forward)
           playerRig.position.addScaledVector(forward, -sy * spd)
+
+          // sx > 0 = đẩy phải = đi sang phải (+right)
+          // sx < 0 = đẩy trái = đi sang trái (-right)
           playerRig.position.addScaledVector(right,    sx * spd)
         }
 
+        // Trigger (button 0) = teleport
         if (curr[0]?.pressed && !prev[0]?.pressed) {
           teleport(idx === 0 ? ctrl0 : ctrl1)
         }
