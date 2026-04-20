@@ -38,8 +38,8 @@ const ENV_CONFIG = {
     // trở thành trung tâm của scene
     centerOffset: { x: -10, z: 0 }, // khoảng cách camera với model
     cameraPos:    { x: -15, y: 1.6, z:  0 },  // tiến lùi của camrera
-    cameraTarget: { x: -10, y: 1.4, z: 0 }, // hướng của camrera
-    modelPos:     { x: -35, y: 0, z: 0 }, // vị trí của model
+    cameraTarget: { x: -25, y: 1.4, z: 0 }, // hướng của camrera
+    modelPos:     { x: -35, sy: 0, z: 0 }, // vị trí của model
     modelRotY:    14.2                         // model quay mặt về phía camera       
   },
 }
