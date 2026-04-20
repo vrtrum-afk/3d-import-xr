@@ -35,7 +35,7 @@ const ENV_CONFIG = {
   room1: {
     envScale:     45,
     centerOffset: { x: -15, z: 0 }, // khoảng cách camera với model
-    cameraPos:    { x: -13, y: -2, z:  0 },  // vị trí của camrera
+    cameraPos:    { x: -13, y: -2.5, z:  0 },  // vị trí của camrera
     cameraTarget: { x: -25, y: -5, z: 0 }, // hướng của camrera
     modelPos:     { x: -35, y: -6, z: 0 }, // vị trí của model
     modelRotY:    14.2                         // model quay mặt về phía camera       
