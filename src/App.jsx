@@ -5,24 +5,34 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+const MODEL_HEIGHT = 170   // world units = 170 cm
+const EYE_HEIGHT   = 160   // camera Y above floor
+
+// ─── Env configs ─────────────────────────────────────────────────────────────
+// All X/Z values are in "model-height multiples" → multiplied by MODEL_HEIGHT at runtime
+// envScale = how many model-heights wide the environment should be
 const ENV_CONFIG = {
-  room3: {
-    envScale: 45, centerOffset: { x: 0, z: 0 },
-    camX: 0, camZ: 2, tgtX: 0, tgtZ: -2,
-    modelX: 0, modelZ: -3, modelRotY: 0,
-    modelHeight: 1.7, eyeHeight: 1.6,
+  room1: {
+    envScale: 45,
+    centerOffset: { x: -15, z: 0 },
+    camX: -13, camZ: 0,
+    tgtX: -25, tgtZ: 0,
+    modelX: -35, modelZ: 0, modelRotY: 14.2,
   },
   room2: {
-    envScale: 25, centerOffset: { x: 0, z: 0 },
-    camX: 0, camZ: 2, tgtX: 0, tgtZ: -2,
-    modelX: 0, modelZ: 0, modelRotY: 0,
-    modelHeight: 1.7, eyeHeight: 1.6,
+    envScale: 45,
+    centerOffset: { x: 0, z: 0 },
+    camX: 0, camZ: 2,
+    tgtX: 0, tgtZ: -2,
+    modelX: 0, modelZ: -3, modelRotY: 0,
   },
-  room1: {
-    envScale: 45, centerOffset: { x: -15, y: -5, z: 0 },
-    camX: -13, camZ: 0, tgtX: -25, tgtZ: 0,
-    modelX: -35, modelZ: 0, modelRotY: 14.2,
-    modelHeight: 1.7, eyeHeight: 1.6,
+  room3: {
+    envScale: 45,
+    centerOffset: { x: 0, z: 0 },
+    camX: 0, camZ: 2,
+    tgtX: 0, tgtZ: -2,
+    modelX: 0, modelZ: -3, modelRotY: 0,
   },
 }
 
@@ -33,9 +43,11 @@ export default function App() {
   const [envScaleUI,  setEnvScaleUI]  = useState(45)
 
   useEffect(() => {
+    // ─── Scene setup ───────────────────────────────────────────────────────
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x0d0d0d)
-    const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 2000)
+
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100000)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setPixelRatio(window.devicePixelRatio)
@@ -47,121 +59,130 @@ export default function App() {
     container.appendChild(renderer.domElement)
     renderer.domElement.style.cssText = 'display:block;width:100%;height:100%'
 
+    // ─── Lights ────────────────────────────────────────────────────────────
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2))
     scene.add(new THREE.AmbientLight(0xffffff, 0.5))
 
-    const grid  = new THREE.GridHelper(20, 20)
+    // ─── Fallback floor & grid ─────────────────────────────────────────────
+    const grid = new THREE.GridHelper(MODEL_HEIGHT * 20, 20)
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(200, 200),
+      new THREE.PlaneGeometry(MODEL_HEIGHT * 200, MODEL_HEIGHT * 200),
       new THREE.MeshStandardMaterial({ color: 0x0d0d0d })
     )
     floor.rotation.x = -Math.PI / 2
+    floor.position.y = 0
     scene.add(grid, floor)
 
+    // ─── Controls ──────────────────────────────────────────────────────────
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping      = true
     controls.dampingFactor      = 0.08
     controls.screenSpacePanning = true
 
+    // ─── Player rig (VR) ───────────────────────────────────────────────────
     const playerRig = new THREE.Group()
     scene.add(playerRig)
     playerRig.add(camera)
 
+    // ─── State refs ────────────────────────────────────────────────────────
     let mixer        = null
     let currentModel = null
     let environment  = null
     let currentEnvKey = 'room1'
     let envZoom       = 45
     let lastEnvPath   = '/env/room1.glb'
-    let activeCfg     = null
+    let activeCfg     = null   // resolved cfg (X/Z already in world units)
 
     const loader = new GLTFLoader()
     const clock  = new THREE.Clock()
 
+    // ─────────────────────────────────────────────────────────────────────
+    // getFloorY — raycast down to find floor surface at (x, z)
+    // ─────────────────────────────────────────────────────────────────────
     function getFloorY(x, z) {
       const rc = new THREE.Raycaster()
-      rc.ray.origin.set(x, 10000, z)
+      rc.ray.origin.set(x, 1e6, z)
       rc.ray.direction.set(0, -1, 0)
       const targets = []
       if (environment) targets.push(environment)
-      if (floor.visible) targets.push(floor)
+      targets.push(floor)
       const hits = rc.intersectObjects(targets, true)
       return hits.length ? hits[0].point.y : 0
     }
 
-    // ─────────────────────────────────────────────────
-    //  setCameraEyeLevel
-    //  Gọi SAU KHI model đã được scale & đặt vị trí xong.
-    //  Đọc chiều cao thực tế của model trong world space,
-    //  rồi tính unitScale = scaledH / modelHeight (mét).
-    //  Camera Y = floorY + eyeHeight * unitScale
-    // ─────────────────────────────────────────────────
-    function setCameraEyeLevel(model, cfg) {
-      // Chiều cao thực tế của model sau khi scale
-      const bbox = new THREE.Box3().setFromObject(model)
-      const scaledH = bbox.getSize(new THREE.Vector3()).y
-
-      // 1 mét thực = bao nhiêu world units
-      const unitScale = scaledH / cfg.modelHeight
-
-      const floorAtCam = getFloorY(cfg.camX, cfg.camZ)
-      const floorAtTgt = getFloorY(cfg.tgtX, cfg.tgtZ)
-
-      // Camera đặt ở tầm mắt người đứng tại vị trí camX, camZ
-      const camY = floorAtCam + cfg.eyeHeight * unitScale
-      // Target nhìn vào mặt model (0.9 * eyeHeight = ngang mắt)
-      const tgtY = floorAtTgt + cfg.eyeHeight * 0.9 * unitScale
-
-      camera.position.set(cfg.camX, camY, cfg.camZ)
-      controls.target.set(cfg.tgtX, tgtY, cfg.tgtZ)
-      controls.update()
-
-      // Lưu lại để VR session dùng
-      cfg.cameraPos    = { x: cfg.camX, y: camY, z: cfg.camZ }
-      cfg.cameraTarget = { x: cfg.tgtX, y: tgtY, z: cfg.tgtZ }
+    // ─────────────────────────────────────────────────────────────────────
+    // resolveCfg — convert multiplier-based config → world-unit config
+    // ─────────────────────────────────────────────────────────────────────
+    function resolveCfg(raw) {
+      const M = MODEL_HEIGHT
+      return {
+        ...raw,
+        camX:   raw.camX   * M,
+        camZ:   raw.camZ   * M,
+        tgtX:   raw.tgtX   * M,
+        tgtZ:   raw.tgtZ   * M,
+        modelX: raw.modelX * M,
+        modelZ: raw.modelZ * M,
+      }
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // placeModel
+    //   • Scale model so its height = MODEL_HEIGHT world units (170 cm)
+    //   • Snap feet exactly to floor surface (no sinking)
+    //   • Set camera at EYE_HEIGHT above floor, looking straight at model face
+    // ─────────────────────────────────────────────────────────────────────
     function placeModel(model, cfg) {
-      // 1. Reset
+      // 1. Reset transforms
       model.scale.set(1, 1, 1)
       model.position.set(0, 0, 0)
-      model.rotation.y = cfg.modelRotY ?? 0
+      model.rotation.set(0, cfg.modelRotY ?? 0, 0)
       model.updateMatrixWorld(true)
 
-      // 2. Chiều cao gốc (chưa scale)
+      // 2. Measure raw height
       const b0   = new THREE.Box3().setFromObject(model)
       const rawH = b0.getSize(new THREE.Vector3()).y
+      if (rawH === 0) return
 
-      // 3. Scale model sao cho chiều cao = modelHeight world-units
-      //    Dùng khoảng cách cam↔model làm reference scale
-      const dx   = cfg.camX - cfg.modelX
-      const dz   = cfg.camZ - cfg.modelZ
-      const dist = Math.sqrt(dx * dx + dz * dz)
-      //    Tỉ lệ: người cao 1.7m, khoảng cách nhìn tự nhiên ~10m → 0.17
-      //    room1: dist≈22, worldH = 22*0.17 ≈ 3.7 units (hợp lý với env scale 45)
-      const worldModelH = dist * (cfg.modelHeight / 10.0)
-      const s = worldModelH / rawH
+      // 3. Scale so height = MODEL_HEIGHT
+      const s = MODEL_HEIGHT / rawH
       model.scale.set(s, s, s)
+      model.updateMatrixWorld(true)
 
-      // 4. Đặt X, Z
+      // 4. Set X/Z position
       model.position.x = cfg.modelX
       model.position.z = cfg.modelZ
       model.position.y = 0
       model.updateMatrixWorld(true)
 
-      // 5. Căn chân chạm sàn
-      const b1 = new THREE.Box3().setFromObject(model)
-      const floorAtModel = getFloorY(cfg.modelX, cfg.modelZ)
-      model.position.y = floorAtModel - b1.min.y
+      // 5. Snap feet to floor — use bounding box AFTER scale & position
+      const b1     = new THREE.Box3().setFromObject(model)
+      const floorY = getFloorY(cfg.modelX, cfg.modelZ)
+      // b1.min.y is where the feet are in world space; push model up so feet = floorY
+      model.position.y += floorY - b1.min.y
       model.updateMatrixWorld(true)
 
-      // 6. Tính camera Y từ chiều cao model thực tế
-      setCameraEyeLevel(model, cfg)
+      // 6. Camera: fixed EYE_HEIGHT above cam floor, looking straight ahead (same Y)
+      const floorCam = getFloorY(cfg.camX, cfg.camZ)
+      const camY     = floorCam + EYE_HEIGHT
+      const tgtY     = camY   // perfectly horizontal gaze → no bird-view
+
+      camera.position.set(cfg.camX, camY, cfg.camZ)
+      controls.target.set(cfg.tgtX, tgtY, cfg.tgtZ)
+      controls.update()
+
+      // Save for VR session
+      cfg.cameraPos    = { x: cfg.camX,  y: camY, z: cfg.camZ }
+      cfg.cameraTarget = { x: cfg.tgtX,  y: tgtY, z: cfg.tgtZ }
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // loadModel
+    // ─────────────────────────────────────────────────────────────────────
     function loadModel(path) {
       loader.load(path, (gltf) => {
         if (currentModel) scene.remove(currentModel)
+        mixer        = null
         currentModel = gltf.scene
         scene.add(currentModel)
         if (activeCfg) placeModel(currentModel, activeCfg)
@@ -172,23 +193,33 @@ export default function App() {
       })
     }
 
-    function applyEnvConfig(cfg) {
-      activeCfg = cfg
+    // ─────────────────────────────────────────────────────────────────────
+    // applyEnvConfig — set camera/model after env is ready
+    // ─────────────────────────────────────────────────────────────────────
+    function applyEnvConfig(raw) {
+      const cfg  = resolveCfg(raw)
+      activeCfg  = cfg
       playerRig.position.set(0, 0, 0)
       playerRig.rotation.set(0, 0, 0)
-      // Camera tạm — placeModel sẽ override với eyeLevel đúng
-      const floorAtCam = getFloorY(cfg.camX, cfg.camZ)
-      camera.position.set(cfg.camX, floorAtCam + cfg.eyeHeight, cfg.camZ)
-      controls.target.set(cfg.tgtX, floorAtCam + cfg.eyeHeight * 0.9, cfg.tgtZ)
-      controls.update()
       if (currentModel) placeModel(currentModel, cfg)
+      else {
+        // No model yet — just set camera roughly
+        const floorCam = getFloorY(cfg.camX, cfg.camZ)
+        const camY     = floorCam + EYE_HEIGHT
+        camera.position.set(cfg.camX, camY, cfg.camZ)
+        controls.target.set(cfg.tgtX, camY, cfg.tgtZ)
+        controls.update()
+      }
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // loadEnvironment
+    // ─────────────────────────────────────────────────────────────────────
     function loadEnvironment(path, key) {
       lastEnvPath   = path
       currentEnvKey = key
-      const baseCfg = { ...(ENV_CONFIG[key] || ENV_CONFIG.room1) }
-      if (baseCfg.envScale != null) envZoom = baseCfg.envScale
+      const rawCfg  = ENV_CONFIG[key] || ENV_CONFIG.room1
+      envZoom       = rawCfg.envScale ?? 45
 
       loader.load(path, (gltf) => {
         if (environment) scene.remove(environment)
@@ -196,26 +227,31 @@ export default function App() {
         floor.visible = false
         grid.visible  = false
 
-        // Scale env
+        // 1. Measure env in its raw space
         const b    = new THREE.Box3().setFromObject(environment)
         const size = b.getSize(new THREE.Vector3())
-        environment.scale.setScalar((2 * envZoom) / Math.max(size.x, size.z))
+
+        // 2. Target width = envZoom * MODEL_HEIGHT  (env is envZoom model-heights wide)
+        const targetWidth = envZoom * MODEL_HEIGHT
+        const envScale    = targetWidth / Math.max(size.x, size.z)
+        environment.scale.setScalar(envScale)
         environment.updateMatrixWorld(true)
 
-        // Căn giữa env
+        // 3. Center env, apply offset (offset is in model-height multiples → * MODEL_HEIGHT)
         const sb = new THREE.Box3().setFromObject(environment)
         const sc = sb.getCenter(new THREE.Vector3())
         environment.position.set(
-          -sc.x + (baseCfg.centerOffset?.x ?? 0),
+          -sc.x + (rawCfg.centerOffset?.x ?? 0) * MODEL_HEIGHT,
           -sb.min.y,
-          -sc.z + (baseCfg.centerOffset?.z ?? 0)
+          -sc.z + (rawCfg.centerOffset?.z ?? 0) * MODEL_HEIGHT,
         )
-        scene.add(environment)
         environment.updateMatrixWorld(true)
 
-        // Kéo sàn về y=0 tại vị trí camera
-        const rc = new THREE.Raycaster()
-        rc.ray.origin.set(baseCfg.camX, 10000, baseCfg.camZ)
+        // 4. Align floor under camera position to y=0
+        const camXW = rawCfg.camX * MODEL_HEIGHT
+        const camZW = rawCfg.camZ * MODEL_HEIGHT
+        const rc    = new THREE.Raycaster()
+        rc.ray.origin.set(camXW, 1e6, camZW)
         rc.ray.direction.set(0, -1, 0)
         const hits = rc.intersectObject(environment, true)
         if (hits.length) {
@@ -223,34 +259,40 @@ export default function App() {
           environment.updateMatrixWorld(true)
         }
 
-        applyEnvConfig(baseCfg)
+        scene.add(environment)
+        applyEnvConfig(rawCfg)
       })
     }
 
     function updateEnvScale(v) {
       envZoom = v
-      if (environment) loadEnvironment(lastEnvPath, currentEnvKey)
+      loadEnvironment(lastEnvPath, currentEnvKey)
     }
 
-    // ─────────────────────────────────────────────────
-    //  VR
-    // ─────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // VR session management
+    // ─────────────────────────────────────────────────────────────────────
     renderer.xr.addEventListener('sessionstart', () => {
       setTimeout(() => {
         if (!activeCfg?.cameraPos) return
         const xrCam = renderer.xr.getCamera()
         xrCam.updateMatrixWorld(true)
         const xrPos = new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld)
+
+        // Offset rig so XR camera lands at desired position
         playerRig.position.x += activeCfg.cameraPos.x - xrPos.x
         playerRig.position.y += activeCfg.cameraPos.y - xrPos.y
         playerRig.position.z += activeCfg.cameraPos.z - xrPos.z
+
+        // Rotate rig so user faces the model
         const desired = new THREE.Vector3(
           activeCfg.cameraTarget.x - activeCfg.cameraPos.x, 0,
           activeCfg.cameraTarget.z - activeCfg.cameraPos.z
         ).normalize()
         const headDir = new THREE.Vector3()
         xrCam.getWorldDirection(headDir)
-        headDir.y = 0; headDir.normalize()
+        headDir.y = 0
+        headDir.normalize()
         playerRig.rotation.y =
           Math.atan2(desired.x, desired.z) - Math.atan2(headDir.x, headDir.z)
       }, 100)
@@ -265,9 +307,9 @@ export default function App() {
       controls.update()
     })
 
-    // ─────────────────────────────────────────────────
-    //  Controllers
-    // ─────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // VR Controllers
+    // ─────────────────────────────────────────────────────────────────────
     const factory = new XRControllerModelFactory()
     const ctrl0   = renderer.xr.getController(0)
     const ctrl1   = renderer.xr.getController(1)
@@ -279,19 +321,22 @@ export default function App() {
     playerRig.add(grip0, grip1)
 
     const rayGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-8)
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -8 * MODEL_HEIGHT)
     ])
     const rayMat = new THREE.LineBasicMaterial({ color: 0x00ffff })
     ctrl0.add(new THREE.Line(rayGeo, rayMat))
     ctrl1.add(new THREE.Line(rayGeo.clone(), rayMat.clone()))
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Teleport
+    // ─────────────────────────────────────────────────────────────────────
     const raycaster  = new THREE.Raycaster()
     const tempMatrix = new THREE.Matrix4()
 
     function teleport(ctrl) {
       tempMatrix.identity().extractRotation(ctrl.matrixWorld)
       raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld)
-      raycaster.ray.direction.set(0,0,-1).applyMatrix4(tempMatrix)
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix)
       const objs = environment ? [floor, environment] : [floor]
       const hits = raycaster.intersectObjects(objs, true)
       if (!hits.length) return
@@ -301,13 +346,26 @@ export default function App() {
       playerRig.position.z = hit.z - (head.z - playerRig.position.z)
     }
 
-    // ─────────────────────────────────────────────────
-    //  Joystick movement — FIXED
-    //  axes[2]=thumbstick X (Quest), axes[3]=thumbstick Y
-    //  sy < 0 → tiến, sy > 0 → lùi
-    //  sx < 0 → trái, sx > 0 → phải
-    // ─────────────────────────────────────────────────
-    const prevBtn = { 0: [], 1: [] }
+    // ─────────────────────────────────────────────────────────────────────
+    // Joystick locomotion
+    //
+    //   Axes layout (Quest / Index):  axes[2] = thumbstick X,  axes[3] = Y
+    //   Vive fallback:                axes[0] = X,             axes[1] = Y
+    //
+    //   axes[3] < 0  →  push stick UP    →  move FORWARD  (into screen)
+    //   axes[3] > 0  →  push stick DOWN  →  move BACKWARD
+    //   axes[2] < 0  →  push stick LEFT  →  move LEFT
+    //   axes[2] > 0  →  push stick RIGHT →  move RIGHT
+    //
+    //   "forward" is defined by where the XR camera is looking (XZ plane only).
+    //   "right"   is the perpendicular direction to the right.
+    //
+    //   Speed is proportional to MODEL_HEIGHT so movement feels natural
+    //   regardless of world scale (≈ 3 m/s walking speed at 170 cm scale).
+    // ─────────────────────────────────────────────────────────────────────
+    const MOVE_SPEED = MODEL_HEIGHT * 3   // world-units per second  (~3 m/s)
+    const DEAD_ZONE  = 0.15
+    const prevButtons = { 0: [], 1: [] }
 
     function handleXRMovement(delta) {
       const session = renderer.xr.getSession()
@@ -316,55 +374,59 @@ export default function App() {
       const xrCam = renderer.xr.getCamera()
       xrCam.updateMatrixWorld(true)
 
-      const camDir = new THREE.Vector3()
-      xrCam.getWorldDirection(camDir)
-      camDir.y = 0
-      camDir.normalize()
+      // Flat forward direction (XZ) from camera
+      const forward = new THREE.Vector3()
+      xrCam.getWorldDirection(forward)
+      forward.y = 0
+      forward.normalize()
 
-      // forward = hướng camera nhìn (XZ)
-      const forward = camDir.clone()
-      // right = cross(up, forward) = (fz, 0, -fx) ✓
-      const up    = new THREE.Vector3(0, 1, 0)
-      const right = new THREE.Vector3().crossVectors(up, forward).normalize()
+      // Right = cross(forward, up)  →  positive X side
+      const right = new THREE.Vector3()
+      right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize()
 
       session.inputSources.forEach((src) => {
         const gp = src.gamepad
         if (!gp) return
         const idx  = src.handedness === 'left' ? 0 : 1
-        const prev = prevBtn[idx] || []
+        const prev = prevButtons[idx] || []
         const curr = Array.from(gp.buttons).map(b => ({ pressed: b.pressed }))
-
         const ax   = gp.axes
-        const DEAD = 0.15
+
         let sx = 0, sy = 0
 
-        // Quest/Index: thumbstick = axes[2], axes[3]
+        // Quest / Index thumbstick
         if (ax.length >= 4) {
-          if (Math.abs(ax[2]) > DEAD) sx = ax[2]
-          if (Math.abs(ax[3]) > DEAD) sy = ax[3]
+          if (Math.abs(ax[2]) > DEAD_ZONE) sx = ax[2]
+          if (Math.abs(ax[3]) > DEAD_ZONE) sy = ax[3]
         }
-        // Vive fallback: axes[0], axes[1]
+        // Vive trackpad fallback
         if (sx === 0 && sy === 0 && ax.length >= 2) {
-          if (Math.abs(ax[0]) > DEAD) sx = ax[0]
-          if (Math.abs(ax[1]) > DEAD) sy = ax[1]
+          if (Math.abs(ax[0]) > DEAD_ZONE) sx = ax[0]
+          if (Math.abs(ax[1]) > DEAD_ZONE) sy = ax[1]
         }
 
         if (sx !== 0 || sy !== 0) {
-          const spd = 3 * delta
-          playerRig.position.addScaledVector(forward, -sy * spd) // sy<0=up=tiến
-          playerRig.position.addScaledVector(right,    sx * spd) // sx>0=right=phải
+          const spd = MOVE_SPEED * delta
+          // sy < 0 (stick up)   → move forward  → addScaledVector(forward, +spd)
+          // sy > 0 (stick down) → move backward → addScaledVector(forward, -spd)
+          playerRig.position.addScaledVector(forward, -sy * spd)
+          // sx > 0 (stick right) → move right → addScaledVector(right, +spd)
+          // sx < 0 (stick left)  → move left  → addScaledVector(right, -spd)
+          playerRig.position.addScaledVector(right, sx * spd)
         }
 
+        // Button 0 (trigger / primary) → teleport
         if (curr[0]?.pressed && !prev[0]?.pressed) {
           teleport(idx === 0 ? ctrl0 : ctrl1)
         }
-        prevBtn[idx] = curr
+
+        prevButtons[idx] = curr
       })
     }
 
-    // ─────────────────────────────────────────────────
-    //  Enter VR / Resize / Loop
-    // ─────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // Enter VR
+    // ─────────────────────────────────────────────────────────────────────
     window.enterVR = async () => {
       if (!navigator.xr) { alert('WebXR not supported'); return }
       try {
@@ -375,6 +437,9 @@ export default function App() {
       } catch (e) { alert('VR error: ' + e.message) }
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Resize
+    // ─────────────────────────────────────────────────────────────────────
     function resize() {
       const { width: w, height: h } = container.getBoundingClientRect()
       if (!w || !h) return
@@ -383,6 +448,9 @@ export default function App() {
       camera.updateProjectionMatrix()
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Render loop
+    // ─────────────────────────────────────────────────────────────────────
     renderer.setAnimationLoop(() => {
       const delta = clock.getDelta()
       if (mixer) mixer.update(delta)
@@ -391,9 +459,13 @@ export default function App() {
       renderer.render(scene, camera)
     })
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Initial load
+    // ─────────────────────────────────────────────────────────────────────
     loadModel('/models/avatar.glb')
     loadEnvironment('/env/room1.glb', 'room1')
 
+    // Expose to sidebar buttons
     window.loadAvatar     = (p, k) => { loadModel(p); setActiveModel(k) }
     window.loadEnv        = (p, k) => { loadEnvironment(p, k); setActiveEnv(k) }
     window.updateEnvScale = (v)    => updateEnvScale(v)
@@ -402,6 +474,7 @@ export default function App() {
     const ro = new ResizeObserver(resize)
     ro.observe(container)
     window.addEventListener('resize', resize)
+
     return () => {
       ro.disconnect()
       window.removeEventListener('resize', resize)
@@ -410,6 +483,7 @@ export default function App() {
     }
   }, [])
 
+  // ─── UI ──────────────────────────────────────────────────────────────────
   return (
     <div className="app">
       <div className="viewer"><div ref={mountRef} className="canvas" /></div>
