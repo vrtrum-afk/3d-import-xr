@@ -31,7 +31,7 @@ const ENV_CONFIG = {
   },
   room1: {
     envScale:     45,
-    centerOffset: { x: -15, z: 0 },
+    centerOffset: { x: -15, y: -5, z: 0 },
     // X, Z giữ nguyên từ config gốc đã hoạt động đúng trên web
     camX:   -13, camZ: 0,
     tgtX:   -25, tgtZ: 0,
