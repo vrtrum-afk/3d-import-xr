@@ -42,11 +42,11 @@ const ENV_CONFIG = {
     envScale:     45,
     // Dịch env về phía âm X để phòng tròn lớn (bên trái trong layout)
     // trở thành trung tâm của scene
-    centerOffset: { x: -5, z: 0 },
+    centerOffset: { x: -8, z: 0 },
     cameraPos:    { x: -15, y: 1.6, z:  0 },  // gần nhất: x: 15, y: 1.6, z:  5 
     cameraTarget: { x: -25, y: 1.4, z: 0 },  // gần nhất:  x: -25, y: 1.4, z: -3
     modelPos:     { x: -35, y: 0, z: 0 },  // x: -10, y: 0, z: 0
-    modelRotY:    14.1                         // quay mặt về z+ (về phía camera)        
+    modelRotY:    14.2                         // quay mặt về z+ (về phía camera)        
   },
 }
 
