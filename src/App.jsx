@@ -4,15 +4,6 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory'
 import './App.css'
-// ================= ENV CONFIG =================
-// envScale    : zoom môi trường
-// centerOffset: dịch chuyển env sau khi căn bounding box — dùng để bù lệch
-//               khi "phần phòng thực tế" không nằm ở tâm bounding box
-//               (ví dụ room3 có nền trắng rộng bên ngoài làm lệch tâm)
-// cameraPos   : vị trí mắt camera (world space, sau khi env đã được đặt)
-// cameraTarget: điểm camera nhìn vào
-// modelPos    : vị trí đặt chân model
-// modelRotY   : hướng xoay model (radian)
 
 const ENV_CONFIG = {
   room3: {
@@ -22,6 +13,7 @@ const ENV_CONFIG = {
     cameraTarget: { x: 0,   y: 1.2, z: -2  },
     modelPos:     { x: 0,   y: 0,   z: -3  },
     modelRotY:    0,
+    modelHeight:  1.7,
   },
   room2: {
     envScale:     25,
@@ -30,14 +22,16 @@ const ENV_CONFIG = {
     cameraTarget: { x: 0,   y: 1.2, z: -2  },
     modelPos:     { x: 0,   y: 0,   z:  0  },
     modelRotY:    0,
+    modelHeight:  1.7,
   },
   room1: {
     envScale:     45,
     centerOffset: { x: -15, z: 0 },
-    cameraPos:    { x: -13, y: -2.5, z:  0 },
-    cameraTarget: { x: -25, y: -5,   z:  0 },
-    modelPos:     { x: -35, y: -6,   z:  0 },
+    cameraPos:    { x: -13, y: -2.5, z: 0 },
+    cameraTarget: { x: -25, y: -5,   z: 0 },
+    modelPos:     { x: -35, y: -6,   z: 0 },
     modelRotY:    14.2,
+    modelHeight:  1.7,   // chiều cao thực tế model trong world units (tuỳ chỉnh)
   },
 }
 
@@ -92,9 +86,7 @@ function App() {
     let currentEnvKey = 'room1'
     let envZoom       = 45
     let lastEnvPath   = '/env/room1.glb'
-
-    // Lưu cfg hiện tại để dùng khi enter VR
-    let activeCfg = ENV_CONFIG['room1']
+    let activeCfg     = ENV_CONFIG['room1']
 
     const loader = new GLTFLoader()
     const clock  = new THREE.Clock()
@@ -107,13 +99,23 @@ function App() {
         currentModel = model
         scene.add(model)
 
-        const box  = new THREE.Box3().setFromObject(model)
-        const size = box.getSize(new THREE.Vector3())
-        model.scale.setScalar(2 / size.y)
+        const cfg        = ENV_CONFIG[currentEnvKey] || ENV_CONFIG['room1']
+        const targetH    = cfg.modelHeight ?? 1.7
 
-        const cfg = ENV_CONFIG[currentEnvKey] || ENV_CONFIG['room1']
+        // Scale để model cao đúng targetH units
+        const box0 = new THREE.Box3().setFromObject(model)
+        const size0 = box0.getSize(new THREE.Vector3())
+        model.scale.setScalar(targetH / size0.y)
+
+        // Đặt vị trí ngang theo config
         model.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
         model.rotation.y = cfg.modelRotY ?? 0
+
+        // Căn chân model đứng đúng trên sàn (min.y == modelPos.y)
+        model.updateMatrixWorld(true)
+        const box1 = new THREE.Box3().setFromObject(model)
+        const footOffset = box1.min.y - cfg.modelPos.y
+        model.position.y -= footOffset
 
         if (gltf.animations.length > 0) {
           mixer = new THREE.AnimationMixer(model)
@@ -125,9 +127,8 @@ function App() {
     // ================= ENV =================
     function applyEnvConfig(cfg) {
       activeCfg = cfg
-
-      // Reset playerRig, đặt camera đúng vị trí web
       playerRig.position.set(0, 0, 0)
+      playerRig.rotation.set(0, 0, 0)
       camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
       controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
       controls.update()
@@ -135,6 +136,12 @@ function App() {
       if (currentModel) {
         currentModel.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
         currentModel.rotation.y = cfg.modelRotY ?? 0
+
+        // Re-căn chân sau khi đổi env
+        currentModel.updateMatrixWorld(true)
+        const box = new THREE.Box3().setFromObject(currentModel)
+        const footOffset = box.min.y - cfg.modelPos.y
+        currentModel.position.y -= footOffset
       }
     }
 
@@ -168,10 +175,8 @@ function App() {
         scene.add(environment)
         environment.updateMatrixWorld(true)
 
-        const rayOriginX = cfg.cameraPos.x
-        const rayOriginZ = cfg.cameraPos.z
-        const groundRay  = new THREE.Raycaster()
-        groundRay.ray.origin.set(rayOriginX, 1000, rayOriginZ)
+        const groundRay = new THREE.Raycaster()
+        groundRay.ray.origin.set(cfg.cameraPos.x, 1000, cfg.cameraPos.z)
         groundRay.ray.direction.set(0, -1, 0)
         const hits = groundRay.intersectObject(environment, true)
         if (hits.length > 0) {
@@ -187,34 +192,49 @@ function App() {
       if (environment) loadEnvironment(lastEnvPath, currentEnvKey)
     }
 
-    // ================= ALIGN PLAYERRIG KHI VÀO VR =================
-    // Khi WebXR bắt đầu, XR camera có vị trí riêng dựa trên headset tracking.
-    // Ta dịch chuyển playerRig để XR camera khớp với vị trí camera web.
+    // ================= VR ALIGN =================
+    // Khi vào VR:
+    //  1. Dịch playerRig.position để XR camera khớp cameraPos
+    //  2. Xoay playerRig.rotation.y để compensate hướng nhìn thực tế của headset
+    //     → người dùng sẽ nhìn thẳng vào cameraTarget
     renderer.xr.addEventListener('sessionstart', () => {
-      // Cần đợi 1 frame để XR camera có matrixWorld chính xác
       setTimeout(() => {
-        const cfg    = activeCfg
-        const xrCam  = renderer.xr.getCamera()
+        const cfg   = activeCfg
+        const xrCam = renderer.xr.getCamera()
         xrCam.updateMatrixWorld(true)
 
-        const xrWorldPos = new THREE.Vector3()
-        xrWorldPos.setFromMatrixPosition(xrCam.matrixWorld)
+        // --- 1. Bù vị trí ---
+        const xrPos = new THREE.Vector3()
+        xrPos.setFromMatrixPosition(xrCam.matrixWorld)
 
-        // Vị trí camera mong muốn trong world space
-        const desiredX = cfg.cameraPos.x
-        const desiredY = cfg.cameraPos.y
-        const desiredZ = cfg.cameraPos.z
+        playerRig.position.x += cfg.cameraPos.x - xrPos.x
+        playerRig.position.y += cfg.cameraPos.y - xrPos.y
+        playerRig.position.z += cfg.cameraPos.z - xrPos.z
 
-        // Dịch playerRig để bù đắp sự lệch giữa XR camera và vị trí mong muốn
-        playerRig.position.x += desiredX - xrWorldPos.x
-        playerRig.position.y += desiredY - xrWorldPos.y
-        playerRig.position.z += desiredZ - xrWorldPos.z
+        // --- 2. Bù hướng nhìn ---
+        // Hướng cần nhìn (từ cameraPos → cameraTarget, bỏ qua trục Y)
+        const desiredDir = new THREE.Vector3(
+          cfg.cameraTarget.x - cfg.cameraPos.x,
+          0,
+          cfg.cameraTarget.z - cfg.cameraPos.z
+        ).normalize()
+
+        // Hướng headset đang nhìn hiện tại (bỏ qua trục Y)
+        const headDir = new THREE.Vector3()
+        xrCam.getWorldDirection(headDir)
+        headDir.y = 0
+        headDir.normalize()
+
+        // Góc cần xoay thêm = góc của desiredDir - góc của headDir
+        const desiredAngle = Math.atan2(desiredDir.x, desiredDir.z)
+        const currentAngle = Math.atan2(headDir.x,    headDir.z)
+        playerRig.rotation.y = desiredAngle - currentAngle
       }, 100)
     })
 
-    // Reset playerRig khi thoát VR
     renderer.xr.addEventListener('sessionend', () => {
       playerRig.position.set(0, 0, 0)
+      playerRig.rotation.set(0, 0, 0)
       const cfg = activeCfg
       camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
       controls.target.set(cfg.cameraTarget.x, cfg.cameraTarget.y, cfg.cameraTarget.z)
