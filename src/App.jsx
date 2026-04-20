@@ -27,12 +27,13 @@ const ENV_CONFIG = {
   room1: {
     envScale:     45,
     centerOffset: { x: -15, z: 0 },
-    cameraPos:    { x: -13, y: -2.5, z: 0 },
-    cameraTarget: { x: -25, y: -5,   z: 0 },
+    // cameraPos.y = modelPos.y + 1.6 (mắt người cao 1.7m)
+    // modelPos.y = -6 → cameraPos.y = -6 + 1.6 = -4.4
+    cameraPos:    { x: -13, y: -4.4, z: 0 },
+    cameraTarget: { x: -25, y: -4.9, z: 0 },
     modelPos:     { x: -35, y: -6,   z: 0 },
     modelRotY:    14.2,
-    // modelHeight để null → tự tính theo khoảng cách camera↔model
-    modelHeight:  null,
+    modelHeight:  null, // tự tính theo dist * 0.1
   },
 }
 
@@ -89,49 +90,45 @@ function App() {
     let lastEnvPath   = '/env/room1.glb'
     let activeCfg     = ENV_CONFIG['room1']
 
-    // Lưu rotation offset giữa playerRig và world để fix joystick
-    // rigYaw = góc playerRig.rotation.y hiện tại khi đang VR
-    let rigYawOffset  = 0
-
     const loader = new GLTFLoader()
     const clock  = new THREE.Clock()
 
-    // ================= TÍNH MODEL HEIGHT THEO ENV =================
-    // Nếu cfg.modelHeight = null, tự tính chiều cao hợp lý dựa vào
-    // khoảng cách từ camera đến model (để model trông "người lớn bình thường")
+    // ================= MODEL HEIGHT =================
     function calcModelHeight(cfg) {
       if (cfg.modelHeight != null) return cfg.modelHeight
-
-      // Khoảng cách ngang camera ↔ model
       const dx   = cfg.cameraPos.x - cfg.modelPos.x
       const dz   = cfg.cameraPos.z - cfg.modelPos.z
       const dist = Math.sqrt(dx * dx + dz * dz)
-
-      // Người cao ~1/10 khoảng cách nhìn là tỉ lệ tự nhiên khi đứng xem
-      // (tuỳ chỉnh hệ số này nếu muốn to/nhỏ hơn)
       return dist * 0.1
     }
 
-    // ================= MODEL =================
+    // ================= PLACE MODEL =================
     function placeModel(model, cfg) {
       const targetH = calcModelHeight(cfg)
 
-      // Scale
-      const box0  = new THREE.Box3().setFromObject(model)
-      const size0 = box0.getSize(new THREE.Vector3())
-      model.scale.setScalar(targetH / size0.y)
+      // 1. Scale theo chiều cao mong muốn
+      const rawBox  = new THREE.Box3().setFromObject(model)
+      const rawSize = rawBox.getSize(new THREE.Vector3())
+      model.scale.setScalar(targetH / rawSize.y)
 
-      // Đặt vị trí X/Z và rotation trước
-      model.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
+      // 2. Đặt rotation trước
       model.rotation.y = cfg.modelRotY ?? 0
 
-      // Căn chân: tính lại bbox sau scale, đẩy model lên để min.y == modelPos.y
+      // 3. Đặt position X/Z, y tạm = cfg.modelPos.y
+      model.position.set(cfg.modelPos.x, cfg.modelPos.y, cfg.modelPos.z)
+
+      // 4. updateMatrixWorld SAU KHI đã set scale + position + rotation
       model.updateMatrixWorld(true)
-      const box1       = new THREE.Box3().setFromObject(model)
-      const footOffset = box1.min.y - cfg.modelPos.y
+
+      // 5. Tính footOffset: đáy bbox hiện tại so với y mong muốn
+      const scaledBox  = new THREE.Box3().setFromObject(model)
+      const footOffset = scaledBox.min.y - cfg.modelPos.y
+
+      // 6. Trừ footOffset để đáy model = cfg.modelPos.y (chân đứng đúng sàn)
       model.position.y -= footOffset
     }
 
+    // ================= LOAD MODEL =================
     function loadModel(path) {
       loader.load(path, (gltf) => {
         if (currentModel) scene.remove(currentModel)
@@ -151,9 +148,7 @@ function App() {
 
     // ================= ENV =================
     function applyEnvConfig(cfg) {
-      activeCfg    = cfg
-      rigYawOffset = 0
-
+      activeCfg = cfg
       playerRig.position.set(0, 0, 0)
       playerRig.rotation.set(0, 0, 0)
       camera.position.set(cfg.cameraPos.x, cfg.cameraPos.y, cfg.cameraPos.z)
@@ -217,15 +212,14 @@ function App() {
         const xrCam = renderer.xr.getCamera()
         xrCam.updateMatrixWorld(true)
 
-        // --- 1. Bù vị trí ---
+        // Bù vị trí
         const xrPos = new THREE.Vector3()
         xrPos.setFromMatrixPosition(xrCam.matrixWorld)
-
         playerRig.position.x += cfg.cameraPos.x - xrPos.x
         playerRig.position.y += cfg.cameraPos.y - xrPos.y
         playerRig.position.z += cfg.cameraPos.z - xrPos.z
 
-        // --- 2. Bù hướng nhìn ---
+        // Bù hướng nhìn
         const desiredDir = new THREE.Vector3(
           cfg.cameraTarget.x - cfg.cameraPos.x,
           0,
@@ -239,13 +233,11 @@ function App() {
 
         const desiredAngle = Math.atan2(desiredDir.x, desiredDir.z)
         const currentAngle = Math.atan2(headDir.x,    headDir.z)
-        rigYawOffset = desiredAngle - currentAngle
-        playerRig.rotation.y = rigYawOffset
+        playerRig.rotation.y = desiredAngle - currentAngle
       }, 100)
     })
 
     renderer.xr.addEventListener('sessionend', () => {
-      rigYawOffset = 0
       playerRig.position.set(0, 0, 0)
       playerRig.rotation.set(0, 0, 0)
       const cfg = activeCfg
@@ -301,7 +293,7 @@ function App() {
       }
     }
 
-    // ================= GAMEPAD POLLING =================
+    // ================= GAMEPAD =================
     const prevButtonState = { 0: [], 1: [] }
 
     function wasJustPressed(curr, prev, btnIndex) {
@@ -309,6 +301,16 @@ function App() {
     }
 
     // ================= XR MOVEMENT =================
+    // ROOT CAUSE joystick sai: axes của WebXR controller KHÔNG map vào
+    // lookDir/rightDir theo cách thông thường. Cần dùng hướng headset
+    // trong LOCAL space của playerRig (không phải world space) để tránh
+    // double-rotation do rigYaw.
+    //
+    // Cách đúng:
+    //   - Lấy quaternion của XR camera trong world space
+    //   - Tách bỏ phần Y-rotation của playerRig ra khỏi quaternion đó
+    //   - Còn lại là hướng nhìn thuần tuý của đầu người dùng
+    //   - Dùng hướng đó để tính forward/right rồi move playerRig
     function handleXRMovement(delta) {
       const session = renderer.xr.getSession()
       if (!session) return
@@ -337,22 +339,32 @@ function App() {
         }
 
         if (stickX !== 0 || stickY !== 0) {
-          // Lấy hướng nhìn của XR camera trong world space
-          const worldLookDir = new THREE.Vector3()
-          xrCam.getWorldDirection(worldLookDir)
-          worldLookDir.y = 0
-          worldLookDir.normalize()
+          // Lấy world-space quaternion của XR camera
+          const worldQuat = new THREE.Quaternion()
+          xrCam.getWorldQuaternion(worldQuat)
 
-          // *** FIX JOYSTICK ***
-          // Vì playerRig đã bị xoay rigYawOffset, vector lookDir trong world space
-          // đã tích hợp đúng hướng thực tế của người dùng → dùng trực tiếp
-          // KHÔNG transform ngược qua rigYaw (đó là lý do joystick bị sai trước đây)
-          const rightDir = new THREE.Vector3()
-          rightDir.crossVectors(worldLookDir, new THREE.Vector3(0, 1, 0)).normalize()
+          // Tách phần Y-rotation của playerRig ra để lấy head-local yaw
+          const rigQuat    = new THREE.Quaternion()
+          rigQuat.setFromEuler(new THREE.Euler(0, playerRig.rotation.y, 0))
+          const rigQuatInv = rigQuat.clone().invert()
+
+          // headQuat = rotation thuần của đầu người dùng (không bị ảnh hưởng bởi rig)
+          const headQuat = rigQuatInv.multiply(worldQuat)
+
+          // Forward của head trong local-rig space, chiếu xuống mặt phẳng ngang
+          const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat)
+          forward.y = 0
+          forward.normalize()
+
+          const right = new THREE.Vector3(1, 0, 0).applyQuaternion(worldQuat)
+          right.y = 0
+          right.normalize()
 
           const speed = 3 * delta
-          playerRig.position.addScaledVector(worldLookDir, -stickY * speed)
-          playerRig.position.addScaledVector(rightDir,      stickX * speed)
+          // stickY âm = đẩy lên trước → tiến (forward)
+          // stickX dương = gạt phải → đi phải (right)
+          playerRig.position.addScaledVector(forward, -stickY * speed)
+          playerRig.position.addScaledVector(right,    stickX * speed)
         }
 
         if (wasJustPressed(curr, prev, 0)) {
